@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from 'framer-motion';
-import { Download, Loader2 } from 'lucide-react';
+import { Download, Loader2, Copy, Check } from 'lucide-react';
 import { cn } from "@/lib/utils";
 
 interface WorkspacePreviewProps {
@@ -31,6 +31,7 @@ function getImageType(dataUrl: string): string {
 }
 
 export function WorkspacePreview({ original, processed, isProcessing }: WorkspacePreviewProps) {
+  const [copied, setCopied] = useState(false);
   
   const originalInfo = useMemo(() => ({
     type: getImageType(original),
@@ -56,6 +57,121 @@ export function WorkspacePreview({ original, processed, isProcessing }: Workspac
     document.body.removeChild(link);
   };
 
+  const handleCopy = async () => {
+    if (!processed) return;
+    
+    const isGif = processed.includes('image/gif');
+    
+    try {
+      if (isGif) {
+        // For GIF: Try multiple workarounds to copy
+        const response = await fetch(processed);
+        const gifBlob = await response.blob();
+        
+        // Method 1: Try copying GIF blob with different MIME type combinations
+        if (navigator.clipboard && window.ClipboardItem) {
+          // Try with 'image/png' wrapper (some browsers might accept)
+          try {
+            const item = new ClipboardItem({ 
+              'image/png': gifBlob,
+              'image/gif': gifBlob 
+            });
+            await navigator.clipboard.write([item]);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+            return;
+          } catch (err1) {
+            // Method 2: Create a temporary img element and use execCommand
+            try {
+              const tempImg = document.createElement('img');
+              tempImg.src = processed;
+              tempImg.style.cssText = 'position:fixed;left:-9999px;opacity:0;pointer-events:none;';
+              document.body.appendChild(tempImg);
+              
+              await new Promise((resolve) => {
+                if (tempImg.complete) {
+                  resolve(undefined);
+                } else {
+                  tempImg.onload = resolve;
+                  tempImg.onerror = resolve;
+                  setTimeout(resolve, 3000);
+                }
+              });
+              
+              // Try to copy the image element
+              const range = document.createRange();
+              range.selectNode(tempImg);
+              const selection = window.getSelection();
+              if (selection) {
+                selection.removeAllRanges();
+                selection.addRange(range);
+                
+                const copied = document.execCommand('copy');
+                selection.removeAllRanges();
+                
+                if (copied) {
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                  document.body.removeChild(tempImg);
+                  return;
+                }
+              }
+              
+              document.body.removeChild(tempImg);
+            } catch (err2) {
+              // Method 3: Fallback to PNG (first frame)
+              const img = new Image();
+              img.crossOrigin = 'anonymous';
+              img.src = processed;
+              
+              await new Promise((resolve) => {
+                img.onload = resolve;
+                img.onerror = resolve;
+                setTimeout(resolve, 3000);
+              });
+              
+              const canvas = document.createElement('canvas');
+              canvas.width = img.width;
+              canvas.height = img.height;
+              const ctx = canvas.getContext('2d');
+              
+              if (ctx) {
+                ctx.drawImage(img, 0, 0);
+                canvas.toBlob(async (pngBlob) => {
+                  if (pngBlob && navigator.clipboard && window.ClipboardItem) {
+                    try {
+                      const item = new ClipboardItem({ 'image/png': pngBlob });
+                      await navigator.clipboard.write([item]);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    } catch (err3) {
+                      console.warn('GIF copying limited by browser. Use Export for full GIF.');
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    }
+                  }
+                }, 'image/png');
+              }
+            }
+          }
+        }
+      } else {
+        // For non-GIF images, use Clipboard API normally
+        const response = await fetch(processed);
+        const blob = await response.blob();
+        
+        if (navigator.clipboard && window.ClipboardItem) {
+          const item = new ClipboardItem({ [blob.type]: blob });
+          await navigator.clipboard.write([item]);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to copy image:', err);
+    }
+  };
+
   return (
     <div className="relative w-full h-full flex flex-col">
       {/* Header */}
@@ -76,18 +192,34 @@ export function WorkspacePreview({ original, processed, isProcessing }: Workspac
           )}
         </div>
         
-        <motion.button 
-          whileTap={{ scale: 0.95 }}
-          onClick={handleDownload}
-          disabled={!processed || isProcessing}
-          className={cn(
-            "btn-primary flex items-center gap-2 text-xs py-1.5 px-3",
-            (!processed || isProcessing) && "opacity-50 cursor-not-allowed"
-          )}
-        >
-          <Download size={14} />
-          Export
-        </motion.button>
+        <div className="flex items-center gap-2">
+          <motion.button 
+            whileTap={{ scale: 0.95 }}
+            onClick={handleCopy}
+            disabled={!processed || isProcessing}
+            className={cn(
+              "btn-secondary flex items-center gap-2 text-xs py-1.5 px-3",
+              (!processed || isProcessing) && "opacity-50 cursor-not-allowed"
+            )}
+            title="Copy image to clipboard"
+          >
+            {copied ? <Check size={14} /> : <Copy size={14} />}
+            {copied ? 'Copied' : 'Copy'}
+          </motion.button>
+          
+          <motion.button 
+            whileTap={{ scale: 0.95 }}
+            onClick={handleDownload}
+            disabled={!processed || isProcessing}
+            className={cn(
+              "btn-primary flex items-center gap-2 text-xs py-1.5 px-3",
+              (!processed || isProcessing) && "opacity-50 cursor-not-allowed"
+            )}
+          >
+            <Download size={14} />
+            Export
+          </motion.button>
+        </div>
       </div>
 
       {/* Preview Area */}
@@ -129,16 +261,9 @@ export function WorkspacePreview({ original, processed, isProcessing }: Workspac
           </AnimatePresence>
           
           {processed ? (
-            <motion.img 
-              key={processed}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              src={processed} 
-              alt="Processed" 
-              className={cn(
-                "relative z-10 max-w-full max-h-full object-contain",
-                isProcessing && "opacity-50"
-              )}
+            <ProcessedImage 
+              src={processed}
+              isProcessing={isProcessing}
             />
           ) : !isProcessing && (
             <div className="text-muted text-xs">Waiting...</div>
@@ -146,6 +271,22 @@ export function WorkspacePreview({ original, processed, isProcessing }: Workspac
         </motion.div>
       </div>
     </div>
+  );
+}
+
+function ProcessedImage({ src, isProcessing }: { src: string, isProcessing: boolean }) {
+  return (
+    <motion.img 
+      key={src}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      src={src} 
+      alt="Processed" 
+      className={cn(
+        "relative z-10 max-w-full max-h-full object-contain",
+        isProcessing && "opacity-50"
+      )}
+    />
   );
 }
 
