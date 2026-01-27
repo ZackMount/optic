@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { motion, AnimatePresence } from 'framer-motion';
 import { Download, Loader2, Copy, Check } from 'lucide-react';
 import { cn } from "@/lib/utils";
@@ -32,6 +32,17 @@ function getImageType(dataUrl: string): string {
 
 export function WorkspacePreview({ original, processed, isProcessing }: WorkspacePreviewProps) {
   const [copied, setCopied] = useState(false);
+  const [isVertical, setIsVertical] = useState(false);
+  
+  useEffect(() => {
+    const checkOrientation = () => {
+      setIsVertical(window.innerWidth < 768); // md breakpoint
+    };
+    
+    checkOrientation();
+    window.addEventListener('resize', checkOrientation);
+    return () => window.removeEventListener('resize', checkOrientation);
+  }, []);
   
   const originalInfo = useMemo(() => ({
     type: getImageType(original),
@@ -223,12 +234,12 @@ export function WorkspacePreview({ original, processed, isProcessing }: Workspac
       </div>
 
       {/* Preview Area */}
-      <div className="flex-1 flex gap-3 p-4 overflow-hidden">
+      <div className="flex-1 flex flex-col md:flex-row gap-3 p-4 overflow-auto">
         {/* Original */}
         <motion.div 
-          initial={{ opacity: 0, x: -10 }}
-          animate={{ opacity: 1, x: 0 }}
-          className="flex-1 relative rounded-xl overflow-hidden bg-secondary/30 flex items-center justify-center"
+          initial={{ opacity: 0, x: isVertical ? 0 : -10, y: isVertical ? -10 : 0 }}
+          animate={{ opacity: 1, x: 0, y: 0 }}
+          className="flex-1 relative rounded-xl overflow-hidden bg-secondary/30 flex items-center justify-center min-h-0"
         >
           <CheckerboardBg />
           <img 
@@ -240,9 +251,9 @@ export function WorkspacePreview({ original, processed, isProcessing }: Workspac
 
         {/* Processed */}
         <motion.div 
-          initial={{ opacity: 0, x: 10 }}
-          animate={{ opacity: 1, x: 0 }}
-          className="flex-1 relative rounded-xl overflow-hidden bg-secondary/30 flex items-center justify-center"
+          initial={{ opacity: 0, x: isVertical ? 0 : 10, y: isVertical ? 10 : 0 }}
+          animate={{ opacity: 1, x: 0, y: 0 }}
+          className="flex-1 relative rounded-xl overflow-hidden bg-secondary/30 flex items-center justify-center min-h-0"
         >
           <CheckerboardBg />
           

@@ -19,7 +19,9 @@ import {
   Palette,
   Grid3x3,
   Sparkles,
-  SunDim
+  SunDim,
+  CircleDot,
+  ArrowRightLeft
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { type Transformations, defaultTransformations } from "@/hooks/use-image-processor";
@@ -136,7 +138,7 @@ export function Toolbar({ transformations, setTransformations, isGif }: ToolbarP
             expanded={expanded}
           />
           <ToolButton 
-            icon={Contrast} 
+            icon={ArrowRightLeft} 
             label="Invert" 
             active={transformations.invert}
             onClick={() => toggle('invert')} 
@@ -174,7 +176,7 @@ export function Toolbar({ transformations, setTransformations, isGif }: ToolbarP
             expanded={expanded}
           />
           <SliderControl
-            icon={Droplets}
+            icon={CircleDot}
             label="Saturation"
             value={transformations.saturation}
             onChange={(v) => setSlider('saturation', v)}
