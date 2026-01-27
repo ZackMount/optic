@@ -113,7 +113,7 @@ pnpm dev
 - **Styling** - [Tailwind CSS](https://tailwindcss.com/)
 - **Animations** - [Framer Motion](https://www.framer.com/motion/)
 - **Icons** - [Lucide React](https://lucide.dev/)
-- **GIF Processing** - [gifuct-js](https://github.com/matt-way/gifuct-js) & [gif.js](https://github.com/jnordberg/gif.js)
+- **GIF Processing** - [gifuct-js](https://github.com/matt-way/gifuct-js) (decode) & [gifenc](https://github.com/mattdesl/gifenc) (encode)
 - **Image Processing** - Native Canvas API
 
 ## Supported Formats
@@ -140,4 +140,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - Built with [Next.js](https://nextjs.org/)
 - Icons by [Lucide](https://lucide.dev/)
-- GIF processing powered by [gifuct-js](https://github.com/matt-way/gifuct-js) and [gif.js](https://github.com/jnordberg/gif.js)
+- GIF decode by [gifuct-js](https://github.com/matt-way/gifuct-js), encode by [gifenc](https://github.com/mattdesl/gifenc)

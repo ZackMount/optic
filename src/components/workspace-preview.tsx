@@ -61,7 +61,16 @@ export function WorkspacePreview({ original, processed, isProcessing }: Workspac
     if (!processed) return;
     const link = document.createElement('a');
     link.href = processed;
-    const ext = processed.includes('image/png') ? 'png' : processed.includes('image/gif') ? 'gif' : 'jpg';
+    let ext = 'png'; // default
+    if (processed.includes('image/gif')) {
+      ext = 'gif';
+    } else if (processed.includes('image/jpeg') || processed.includes('image/jpg')) {
+      ext = 'jpg';
+    } else if (processed.includes('image/webp')) {
+      ext = 'webp';
+    } else if (processed.includes('image/png')) {
+      ext = 'png';
+    }
     link.download = `optic-${Date.now()}.${ext}`;
     document.body.appendChild(link);
     link.click();

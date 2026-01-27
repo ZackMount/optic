@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 // @ts-ignore
 import { parseGIF, decompressFrames } from 'gifuct-js';
-// @ts-ignore
-import GIF from 'gif.js';
+import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 
 export type Transformations = {
   flipHorizontal: boolean;
@@ -98,13 +97,28 @@ async function processStaticImage(
   setResult: (s: string) => void
 ) {
   let imageSrc = src;
+  let originalFormat: string | null = null;
   
   if (src.startsWith('http://') || src.startsWith('https://')) {
     const fetchWithFallback = async (url: string): Promise<Blob> => {
       try {
         const response = await fetch(url);
         if (response.ok) {
-          return await response.blob();
+          const blob = await response.blob();
+          // Try to detect format from Content-Type or URL extension
+          if (blob.type) {
+            originalFormat = blob.type;
+          } else {
+            const urlLower = url.toLowerCase();
+            if (urlLower.includes('.jpg') || urlLower.includes('.jpeg')) {
+              originalFormat = 'image/jpeg';
+            } else if (urlLower.includes('.png')) {
+              originalFormat = 'image/png';
+            } else if (urlLower.includes('.webp')) {
+              originalFormat = 'image/webp';
+            }
+          }
+          return blob;
         }
       } catch {
       }
@@ -114,7 +128,11 @@ async function processStaticImage(
       if (!proxyResponse.ok) {
         throw new Error('Failed to fetch image');
       }
-      return await proxyResponse.blob();
+      const blob = await proxyResponse.blob();
+      if (blob.type) {
+        originalFormat = blob.type;
+      }
+      return blob;
     };
 
     try {
@@ -127,6 +145,19 @@ async function processStaticImage(
     } catch (e) {
       console.error('Failed to fetch image from URL:', e);
       throw new Error('Unable to load image from URL. Please download the image and upload it directly.');
+    }
+  } else if (src.startsWith('data:')) {
+    // Extract format from data URL
+    const match = src.match(/^data:image\/([^;]+)/);
+    if (match) {
+      const format = match[1].toLowerCase();
+      if (format === 'jpeg' || format === 'jpg') {
+        originalFormat = 'image/jpeg';
+      } else if (format === 'png') {
+        originalFormat = 'image/png';
+      } else if (format === 'webp') {
+        originalFormat = 'image/webp';
+      }
     }
   }
   
@@ -146,8 +177,30 @@ async function processStaticImage(
   canvas.height = isRotated90or270 ? img.width : img.height;
 
   applyTransformsToCanvas(canvas, ctx, img, img.width, img.height, transformations);
-  
-  setResult(canvas.toDataURL('image/png'));
+
+  const outputFormat = originalFormat === 'image/jpeg' ? 'image/jpeg' : 'image/png';
+
+  if (outputFormat === 'image/jpeg') {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            reject(new Error('JPEG encoding failed'));
+            return;
+          }
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        },
+        'image/jpeg',
+        0.88
+      );
+    });
+    setResult(dataUrl);
+  } else {
+    setResult(canvas.toDataURL('image/png'));
+  }
 }
 
 async function processGif(
@@ -252,27 +305,14 @@ async function processGif(
     }
   }
 
-  console.log(`Rendered ${renderedFrames.length} frames, now encoding...`);
   setProgress(50);
 
-  const encoder = new GIF({
-    workers: 2,
-    quality: 10,
-    workerScript: '/gif.worker.js',
-    width: finalWidth,
-    height: finalHeight,
-    repeat: 0,
-    transparent: 0x00FF00,
-    background: 0x00FF00
-  });
-
+  const framePixels: Uint8ClampedArray[] = [];
   for (let i = 0; i < renderedFrames.length; i++) {
-    const { canvas, delay } = renderedFrames[i];
-    
+    const { canvas } = renderedFrames[i];
     const ctx = canvas.getContext('2d')!;
     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imgData.data;
-    
+    const data = new Uint8ClampedArray(imgData.data);
     for (let j = 0; j < data.length; j += 4) {
       if (data[j + 3] < 128) {
         data[j] = 0;
@@ -281,35 +321,49 @@ async function processGif(
         data[j + 3] = 255;
       }
     }
-    ctx.putImageData(imgData, 0, 0);
-    
-    encoder.addFrame(canvas, { delay, copy: true, transparent: 0x00FF00 });
-    
-    const addProgress = 50 + Math.round(((i + 1) / renderedFrames.length) * 20);
-    setProgress(addProgress);
+    framePixels.push(data);
+    setProgress(50 + Math.round(((i + 1) / renderedFrames.length) * 35));
   }
 
-  console.log('All frames added, rendering GIF...');
-  setProgress(70);
+  const palette = quantize(framePixels[0], 256, {
+    format: 'rgba4444',
+    oneBitAlpha: 128,
+    clearAlpha: true,
+    clearAlphaThreshold: 128,
+    clearAlphaColor: 0x00ff00
+  });
+  const transparentIndex = palette.findIndex(
+    (c: number[]) => c[0] === 0 && c[1] === 255 && c[2] === 0
+  );
+  const transparentIdx = transparentIndex >= 0 ? transparentIndex : 0;
+
+  const encoder = GIFEncoder();
+  for (let i = 0; i < renderedFrames.length; i++) {
+    const { delay } = renderedFrames[i];
+    const index = applyPalette(framePixels[i], palette, 'rgba4444');
+    encoder.writeFrame(index, finalWidth, finalHeight, {
+      palette: i === 0 ? palette : undefined,
+      delay,
+      repeat: i === 0 ? 0 : undefined,
+      transparent: true,
+      transparentIndex: transparentIdx
+    });
+    setProgress(85 + Math.round(((i + 1) / renderedFrames.length) * 15));
+  }
+  encoder.finish();
+
+  const bytes = encoder.bytes();
+  const blob = new Blob([new Uint8Array(bytes)], { type: 'image/gif' });
 
   return new Promise<void>((resolve, reject) => {
-    encoder.on('finished', (blob: Blob) => {
-      console.log(`GIF rendered, size: ${blob.size} bytes`);
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setResult(reader.result as string);
-        setProgress(100);
-        resolve();
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-
-    encoder.on('progress', (p: number) => {
-      setProgress(70 + Math.round(p * 30));
-    });
-
-    encoder.render();
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setResult(reader.result as string);
+      setProgress(100);
+      resolve();
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
   });
 }
 
