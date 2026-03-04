@@ -231,32 +231,45 @@ async function processGif(
   const finalWidth = isRotated ? gifHeight : gifWidth;
   const finalHeight = isRotated ? gifWidth : gifHeight;
 
-  const renderedFrames: { canvas: HTMLCanvasElement; delay: number }[] = [];
+  // --- Phase 1: Detect if the source GIF actually uses transparency ---
+  let gifHasTransparency = false;
+  for (const frame of frames) {
+    if (frame.transparentIndex !== undefined && frame.transparentIndex !== null && frame.transparentIndex >= 0) {
+      gifHasTransparency = true;
+      break;
+    }
+  }
+
+  // --- Phase 2: Render all frames to full-size snapshots (composited) ---
+  // We always render in original order to respect disposal methods,
+  // then shuffle the fully-rendered snapshots if needed.
+  const fullFrameSnapshots: { canvas: HTMLCanvasElement; delay: number }[] = [];
   
   const accCanvas = document.createElement('canvas');
   accCanvas.width = gifWidth;
   accCanvas.height = gifHeight;
   const accCtx = accCanvas.getContext('2d')!;
+
+  // For non-transparent GIFs, fill with white background to prevent
+  // transparent areas from appearing
+  if (!gifHasTransparency) {
+    accCtx.fillStyle = '#ffffff';
+    accCtx.fillRect(0, 0, gifWidth, gifHeight);
+  }
   
   const prevCanvas = document.createElement('canvas');
   prevCanvas.width = gifWidth;
   prevCanvas.height = gifHeight;
   const prevCtx = prevCanvas.getContext('2d')!;
 
-  let frameList = [...frames];
-  if (transformations.shuffleFrames && frameList.length > 1) {
-    for (let i = frameList.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [frameList[i], frameList[j]] = [frameList[j], frameList[i]];
-    }
-  }
-
-  for (let i = 0; i < frameList.length; i++) {
-    const frame = frameList[i];
+  for (let i = 0; i < frames.length; i++) {
+    const frame = frames[i];
     
+    // Save state before drawing for disposal type 3 (restore to previous)
     prevCtx.clearRect(0, 0, gifWidth, gifHeight);
     prevCtx.drawImage(accCanvas, 0, 0);
     
+    // Draw current frame patch onto accumulator
     const frameCanvas = document.createElement('canvas');
     frameCanvas.width = frame.dims.width;
     frameCanvas.height = frame.dims.height;
@@ -271,11 +284,55 @@ async function processGif(
     
     accCtx.drawImage(frameCanvas, frame.dims.left, frame.dims.top);
     
+    // Take a full snapshot of the composited frame
     const snapshotCanvas = document.createElement('canvas');
     snapshotCanvas.width = gifWidth;
     snapshotCanvas.height = gifHeight;
     const snapshotCtx = snapshotCanvas.getContext('2d')!;
     snapshotCtx.drawImage(accCanvas, 0, 0);
+    
+    fullFrameSnapshots.push({
+      canvas: snapshotCanvas,
+      delay: frame.delay || 100
+    });
+    
+    // Handle disposal AFTER taking snapshot
+    const disposalType = frame.disposalType;
+    if (disposalType === 2) {
+      // Dispose: restore to background
+      accCtx.clearRect(frame.dims.left, frame.dims.top, frame.dims.width, frame.dims.height);
+      if (!gifHasTransparency) {
+        accCtx.fillStyle = '#ffffff';
+        accCtx.fillRect(frame.dims.left, frame.dims.top, frame.dims.width, frame.dims.height);
+      }
+    } else if (disposalType === 3) {
+      // Dispose: restore to previous
+      accCtx.clearRect(0, 0, gifWidth, gifHeight);
+      accCtx.drawImage(prevCanvas, 0, 0);
+    }
+    
+    const frameProgress = 10 + Math.round(((i + 1) / frames.length) * 25);
+    setProgress(frameProgress);
+    
+    if (i % 3 === 0) {
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+
+  // --- Phase 3: Shuffle the fully-rendered snapshots if needed ---
+  let orderedSnapshots = fullFrameSnapshots;
+  if (transformations.shuffleFrames && orderedSnapshots.length > 1) {
+    orderedSnapshots = [...fullFrameSnapshots];
+    for (let i = orderedSnapshots.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [orderedSnapshots[i], orderedSnapshots[j]] = [orderedSnapshots[j], orderedSnapshots[i]];
+    }
+  }
+
+  // --- Phase 4: Apply visual transforms to each snapshot ---
+  const renderedFrames: { canvas: HTMLCanvasElement; delay: number }[] = [];
+  for (let i = 0; i < orderedSnapshots.length; i++) {
+    const { canvas: snapshotCanvas, delay } = orderedSnapshots[i];
     
     const resultCanvas = document.createElement('canvas');
     resultCanvas.width = finalWidth;
@@ -284,20 +341,9 @@ async function processGif(
     
     applyTransformsToCanvas(resultCanvas, resultCtx, snapshotCanvas, gifWidth, gifHeight, transformations);
     
-    renderedFrames.push({
-      canvas: resultCanvas,
-      delay: frame.delay || 100
-    });
+    renderedFrames.push({ canvas: resultCanvas, delay });
     
-    const disposalType = frame.disposalType;
-    if (disposalType === 2) {
-      accCtx.clearRect(frame.dims.left, frame.dims.top, frame.dims.width, frame.dims.height);
-    } else if (disposalType === 3) {
-      accCtx.clearRect(0, 0, gifWidth, gifHeight);
-      accCtx.drawImage(prevCanvas, 0, 0);
-    }
-    
-    const frameProgress = 10 + Math.round(((i + 1) / frameList.length) * 40);
+    const frameProgress = 35 + Math.round(((i + 1) / orderedSnapshots.length) * 15);
     setProgress(frameProgress);
     
     if (i % 3 === 0) {
@@ -307,48 +353,80 @@ async function processGif(
 
   setProgress(50);
 
+  // --- Phase 5: Extract pixel data and handle transparency ---
   const framePixels: Uint8ClampedArray[] = [];
   for (let i = 0; i < renderedFrames.length; i++) {
     const { canvas } = renderedFrames[i];
     const ctx = canvas.getContext('2d')!;
     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const data = new Uint8ClampedArray(imgData.data);
-    for (let j = 0; j < data.length; j += 4) {
-      if (data[j + 3] < 128) {
-        data[j] = 0;
-        data[j + 1] = 255;
-        data[j + 2] = 0;
-        data[j + 3] = 255;
+
+    if (gifHasTransparency) {
+      // Replace transparent pixels with a key color for GIF transparency
+      for (let j = 0; j < data.length; j += 4) {
+        if (data[j + 3] < 128) {
+          data[j] = 0;
+          data[j + 1] = 255;
+          data[j + 2] = 0;
+          data[j + 3] = 255;
+        }
       }
     }
+
     framePixels.push(data);
     setProgress(50 + Math.round(((i + 1) / renderedFrames.length) * 35));
+
+    if (i % 3 === 0) {
+      await new Promise(r => setTimeout(r, 0));
+    }
   }
 
-  const palette = quantize(framePixels[0], 256, {
-    format: 'rgba4444',
-    oneBitAlpha: 128,
-    clearAlpha: true,
-    clearAlphaThreshold: 128,
-    clearAlphaColor: 0x00ff00
-  });
-  const transparentIndex = palette.findIndex(
-    (c: number[]) => c[0] === 0 && c[1] === 255 && c[2] === 0
-  );
-  const transparentIdx = transparentIndex >= 0 ? transparentIndex : 0;
+  // --- Phase 6: Quantize and encode ---
+  const quantizeOpts: Parameters<typeof quantize>[2] = gifHasTransparency
+    ? {
+        format: 'rgba4444' as const,
+        oneBitAlpha: 128,
+        clearAlpha: true,
+        clearAlphaThreshold: 128,
+        clearAlphaColor: 0x00ff00
+      }
+    : {
+        format: 'rgba4444' as const
+      };
+
+  const palette = quantize(framePixels[0], 256, quantizeOpts);
+
+  let transparentIdx = -1;
+  if (gifHasTransparency) {
+    const transparentIndex = palette.findIndex(
+      (c: number[]) => c[0] === 0 && c[1] === 255 && c[2] === 0
+    );
+    transparentIdx = transparentIndex >= 0 ? transparentIndex : 0;
+  }
 
   const encoder = GIFEncoder();
   for (let i = 0; i < renderedFrames.length; i++) {
     const { delay } = renderedFrames[i];
     const index = applyPalette(framePixels[i], palette, 'rgba4444');
-    encoder.writeFrame(index, finalWidth, finalHeight, {
+
+    const frameOpts: Parameters<typeof encoder.writeFrame>[3] = {
       palette: i === 0 ? palette : undefined,
       delay,
       repeat: i === 0 ? 0 : undefined,
-      transparent: true,
-      transparentIndex: transparentIdx
-    });
+      dispose: 2, // Each frame fully replaces the previous one
+    };
+
+    if (gifHasTransparency && transparentIdx >= 0) {
+      frameOpts.transparent = true;
+      frameOpts.transparentIndex = transparentIdx;
+    }
+
+    encoder.writeFrame(index, finalWidth, finalHeight, frameOpts);
     setProgress(85 + Math.round(((i + 1) / renderedFrames.length) * 15));
+
+    if (i % 3 === 0) {
+      await new Promise(r => setTimeout(r, 0));
+    }
   }
   encoder.finish();
 
