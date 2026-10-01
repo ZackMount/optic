@@ -37,7 +37,7 @@ const COLLAPSED_WIDTH = 60;
 const EXPANDED_WIDTH = 240;
 
 export function Toolbar({ transformations, setTransformations, isGif }: ToolbarProps) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   
   const toggle = (key: keyof Transformations) => {
     setTransformations(prev => ({ ...prev, [key]: !prev[key as keyof Transformations] }));
@@ -69,16 +69,16 @@ export function Toolbar({ transformations, setTransformations, isGif }: ToolbarP
       transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
       className="flex flex-col h-full overflow-hidden"
     >
-      {/* Expand Toggle */}
       <button
         onClick={() => setExpanded(!expanded)}
+        aria-label={expanded ? 'Collapse sidebar' : 'Expand sidebar'}
+        aria-expanded={expanded}
         className="h-11 flex items-center justify-center text-muted hover:text-foreground transition-colors shrink-0"
       >
         {expanded ? <ChevronsLeft size={16} /> : <ChevronsRight size={16} />}
       </button>
       
       <div className="flex-1 flex flex-col gap-0.5 px-1.5 overflow-y-auto overflow-x-hidden">
-        {/* Transform */}
         <ToolGroup title="Transform" expanded={expanded}>
           <ToolButton 
             icon={RotateCw} 
@@ -103,7 +103,6 @@ export function Toolbar({ transformations, setTransformations, isGif }: ToolbarP
           />
         </ToolGroup>
 
-        {/* Symmetry */}
         <ToolGroup title="Symmetry" expanded={expanded}>
           <ToolButton 
             icon={Columns2}
@@ -128,7 +127,6 @@ export function Toolbar({ transformations, setTransformations, isGif }: ToolbarP
           />
         </ToolGroup>
 
-        {/* Colors */}
         <ToolGroup title="Colors" expanded={expanded}>
           <ToolButton 
             icon={Moon} 
@@ -153,7 +151,6 @@ export function Toolbar({ transformations, setTransformations, isGif }: ToolbarP
           />
         </ToolGroup>
 
-        {/* Adjustments */}
         <ToolGroup title="Adjust" expanded={expanded}>
           <SliderControl
             icon={Sun}
@@ -197,7 +194,6 @@ export function Toolbar({ transformations, setTransformations, isGif }: ToolbarP
           />
         </ToolGroup>
 
-        {/* Effects */}
         <ToolGroup title="Effects" expanded={expanded}>
           <SliderControl
             icon={Droplets}
@@ -231,7 +227,6 @@ export function Toolbar({ transformations, setTransformations, isGif }: ToolbarP
           />
         </ToolGroup>
         
-        {/* GIF */}
         {isGif && (
           <ToolGroup title="GIF" expanded={expanded}>
             <ToolButton 
@@ -245,7 +240,6 @@ export function Toolbar({ transformations, setTransformations, isGif }: ToolbarP
         )}
       </div>
 
-      {/* Reset */}
       <div className="py-2 px-1.5 border-t border-border shrink-0 flex justify-center">
         <button
           onClick={reset}
@@ -306,6 +300,7 @@ function ToolButton({
   return (
     <button
       onClick={onClick}
+      aria-label={label}
       className={cn(
         "group relative h-9 flex items-center rounded-lg transition-colors duration-150",
         active 
@@ -412,6 +407,7 @@ function SliderControl({
         <div className="relative h-6 flex items-center py-1.5">
           <input
             type="range"
+            aria-label={label}
             min={min}
             max={max}
             value={value}

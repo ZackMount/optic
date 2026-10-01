@@ -36,7 +36,6 @@ export function Header({ themeMode, onCycleTheme, hasImage, onClose, progress = 
   return (
     <>
       <header className="relative shrink-0 z-50">
-      {/* Progress Bar */}
       {showProgress && (
         <motion.div 
           initial={{ opacity: 0 }}
@@ -57,7 +56,6 @@ export function Header({ themeMode, onCycleTheme, hasImage, onClose, progress = 
       )}
       
       <div className="h-14 flex items-center justify-between px-4 border-b border-border">
-        {/* Logo */}
         <div className="flex items-center gap-2.5">
           <div className="w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center">
             <Aperture className="w-4 h-4 text-primary" strokeWidth={2} />
@@ -65,7 +63,6 @@ export function Header({ themeMode, onCycleTheme, hasImage, onClose, progress = 
           <span className="font-semibold text-foreground text-l">Optic</span>
         </div>
 
-        {/* Center - Processing indicator */}
         {showProgress && (
           <motion.div 
             initial={{ opacity: 0, y: -10 }}
@@ -80,9 +77,7 @@ export function Header({ themeMode, onCycleTheme, hasImage, onClose, progress = 
           </motion.div>
         )}
 
-        {/* Actions */}
         <div className="flex items-center gap-1">
-          {/* Theme Toggle */}
           <button
             onClick={onCycleTheme}
             className="w-8 h-8 rounded-lg flex items-center justify-center text-muted hover:text-foreground hover:bg-secondary transition-colors"
@@ -98,7 +93,6 @@ export function Header({ themeMode, onCycleTheme, hasImage, onClose, progress = 
             </motion.div>
           </button>
 
-          {/* About */}
           <button
             onClick={() => setShowAbout(true)}
             className="w-8 h-8 rounded-lg flex items-center justify-center text-muted hover:text-foreground hover:bg-secondary transition-colors"
@@ -107,7 +101,6 @@ export function Header({ themeMode, onCycleTheme, hasImage, onClose, progress = 
             <Info size={16} />
           </button>
 
-          {/* Close - Always visible, disabled when no image */}
           <button
             onClick={onClose}
             disabled={!hasImage}
@@ -125,7 +118,6 @@ export function Header({ themeMode, onCycleTheme, hasImage, onClose, progress = 
       </div>
       </header>
 
-      {/* About Dialog */}
       <AboutDialog isOpen={showAbout} onClose={() => setShowAbout(false)} />
     </>
   );

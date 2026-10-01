@@ -1,57 +1,19 @@
-"use client";
+'use client';
+import { useEffect } from 'react';
+import { createImageInput } from '@/lib/image-engine/input';
+import type { ImageInput } from '@/lib/image-engine/types';
 
-import { useEffect, useCallback } from 'react';
-
-export function useClipboardPaste(onImagePaste: (dataUrl: string) => void) {
-  const handlePaste = useCallback(async (e: ClipboardEvent) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    // Find image item
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      
-      if (item.type.startsWith('image/')) {
-        e.preventDefault();
-        
-        const file = item.getAsFile();
-        if (!file) continue;
-
-        // Read file as ArrayBuffer to check actual content type
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          if (!event.target?.result) return;
-          
-          const arrayBuffer = event.target.result as ArrayBuffer;
-          const bytes = new Uint8Array(arrayBuffer.slice(0, 6));
-          
-          // Check for GIF signature
-          const isGif = bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46;
-          
-          // Convert to base64
-          const base64 = btoa(
-            Array.from(new Uint8Array(arrayBuffer))
-              .map(byte => String.fromCharCode(byte))
-              .join('')
-          );
-          
-          // Use correct MIME type
-          const mimeType = isGif ? 'image/gif' : (file.type || 'image/png');
-          const dataUrl = `data:${mimeType};base64,${base64}`;
-          
-          onImagePaste(dataUrl);
-        };
-        
-        reader.readAsArrayBuffer(file);
-        break;
-      }
-    }
-  }, [onImagePaste]);
-
+export function useClipboardPaste(onImagePaste: (input: ImageInput) => void, onError: (message: string) => void) {
   useEffect(() => {
-    window.addEventListener('paste', handlePaste);
-    return () => {
-      window.removeEventListener('paste', handlePaste);
+    const handlePaste = async (event: ClipboardEvent) => {
+      const item = Array.from(event.clipboardData?.items || []).find(item => item.type.startsWith('image/'));
+      const file = item?.getAsFile();
+      if (!file) return;
+      event.preventDefault();
+      try { onImagePaste(await createImageInput(file, file.name || 'pasted-image')); }
+      catch (error) { onError(error instanceof Error ? error.message : 'Unable to paste the image.'); }
     };
-  }, [handlePaste]);
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [onImagePaste, onError]);
 }

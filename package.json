@@ -3,18 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "next dev --webpack",
+    "build": "next build --webpack",
+    "prepare:engine": "node scripts/prepare-engine.mjs",
+    "postinstall": "npm run prepare:engine",
+    "predev": "npm run prepare:engine",
+    "prebuild": "npm run prepare:engine",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
+    "@imagemagick/magick-wasm": "0.0.44",
     "clsx": "^2.1.1",
     "framer-motion": "^12.29.0",
-    "gifenc": "^1.0.3",
-    "gifuct-js": "^2.1.2",
     "lucide-react": "^0.563.0",
     "next": "^16.1.6",
+    "omggif": "1.0.10",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "tailwind-merge": "^3.4.0"
@@ -22,6 +26,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/omggif": "^1.0.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",

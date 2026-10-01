@@ -1,13 +1,15 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState } from 'react';
 import { Upload, Link as LinkIcon, Image as ImageIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
 import { KeyboardHint } from "@/components/keyboard-hint";
+import { createImageInput, loadImageUrl } from "@/lib/image-engine/input";
+import type { ImageInput } from "@/lib/image-engine/types";
 
 interface ImageDropzoneProps {
-  onImageSelect: (dataUrl: string) => void;
+  onImageSelect: (input: ImageInput) => void;
   className?: string;
 }
 
@@ -15,140 +17,35 @@ export function ImageDropzone({ onImageSelect, className }: ImageDropzoneProps) 
   const [isDragging, setIsDragging] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [showUrlInput, setShowUrlInput] = useState(false);
-  const dropzoneRef = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
+  const processFile = async (file: File) => {
+    setError(null);
+    try { onImageSelect(await createImageInput(file, file.name)); }
+    catch (error) { setError(error instanceof Error ? error.message : 'Unable to open the image.'); }
   };
-
-  const handleDragLeave = () => {
-    setIsDragging(false);
+  const handleDragOver = (event: React.DragEvent) => { event.preventDefault(); setIsDragging(true); };
+  const handleDragLeave = () => setIsDragging(false);
+  const handleDrop = (event: React.DragEvent) => {
+    event.preventDefault(); setIsDragging(false);
+    if (event.dataTransfer.files?.[0]) void processFile(event.dataTransfer.files[0]);
   };
-
-  const processFile = (file: File) => {
-    if (!file.type.startsWith('image/')) return;
-    
-    if (file.type === 'image/gif') {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        if (e.target?.result) {
-          onImageSelect(e.target.result as string);
-        }
-      };
-      reader.readAsDataURL(file);
-      return;
-    }
-    
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      if (!e.target?.result) return;
-      
-      const arrayBuffer = e.target.result as ArrayBuffer;
-      const bytes = new Uint8Array(arrayBuffer.slice(0, 6));
-      
-      // Check for GIF signature: "GIF87a" or "GIF89a" (0x47 0x49 0x46)
-      const isGif = bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46;
-
-      const base64 = btoa(
-        Array.from(new Uint8Array(arrayBuffer))
-          .map(byte => String.fromCharCode(byte))
-          .join('')
-      );
-      
-      const mimeType = isGif ? 'image/gif' : (file.type || 'image/png');
-      const dataUrl = `data:${mimeType};base64,${base64}`;
-      
-      onImageSelect(dataUrl);
-    };
-    
-    reader.readAsArrayBuffer(file);
+  const handleFileInput = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files?.[0]) void processFile(event.target.files[0]);
+    event.target.value = '';
   };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    if (e.dataTransfer.files?.[0]) {
-      processFile(e.dataTransfer.files[0]);
-    }
+  const handleUrlSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (loading) return;
+    setLoading(true); setError(null);
+    try { onImageSelect(await loadImageUrl(urlInput)); }
+    catch (error) { setError(error instanceof Error ? error.message : 'Unable to download the image.'); }
+    finally { setLoading(false); }
   };
-
-  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files?.[0]) {
-      processFile(e.target.files[0]);
-    }
-  };
-
-  const handleUrlSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (urlInput) {
-      onImageSelect(urlInput);
-    }
-  };
-
-  const handlePaste = useCallback(async (e: ClipboardEvent) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      
-      if (item.type.startsWith('image/')) {
-        e.preventDefault();
-        
-        const file = item.getAsFile();
-        if (!file) continue;
-
-        if (file.type === 'image/gif') {
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            if (event.target?.result) {
-              onImageSelect(event.target.result as string);
-            }
-          };
-          reader.readAsDataURL(file);
-          return;
-        }
-        
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          if (!event.target?.result) return;
-          
-          const arrayBuffer = event.target.result as ArrayBuffer;
-          const bytes = new Uint8Array(arrayBuffer.slice(0, 6));
-          const isGif = bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46;
-          
-          const base64 = btoa(
-            Array.from(new Uint8Array(arrayBuffer))
-              .map(byte => String.fromCharCode(byte))
-              .join('')
-          );
-          
-          const mimeType = isGif ? 'image/gif' : (file.type || 'image/png');
-          const dataUrl = `data:${mimeType};base64,${base64}`;
-          
-          onImageSelect(dataUrl);
-        };
-        
-        reader.readAsArrayBuffer(file);
-        break;
-      }
-    }
-  }, [onImageSelect]);
-
-  useEffect(() => {
-    const element = dropzoneRef.current;
-    if (!element) return;
-
-    element.addEventListener('paste', handlePaste);
-    return () => {
-      element.removeEventListener('paste', handlePaste);
-    };
-  }, [handlePaste]);
 
   return (
     <motion.div 
-      ref={dropzoneRef}
       tabIndex={0}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
@@ -163,9 +60,10 @@ export function ImageDropzone({ onImageSelect, className }: ImageDropzoneProps) 
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {error && <p role="alert" className="absolute top-4 z-20 px-4 text-sm text-destructive text-center">{error}</p>}
       <input 
         type="file" 
-        accept="image/*" 
+        accept="image/*,.jpg,.jpeg,.png,.gif,.webp,.avif,.bmp,.tiff,.tif"
         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
         onChange={handleFileInput}
       />
@@ -175,7 +73,6 @@ export function ImageDropzone({ onImageSelect, className }: ImageDropzoneProps) 
         animate={isDragging ? { scale: 1.02 } : { scale: 1 }}
         transition={{ type: "spring", stiffness: 300, damping: 20 }}
       >
-        {/* Icon */}
         <div className={cn(
           "w-16 h-16 rounded-2xl flex items-center justify-center transition-colors",
           isDragging ? "bg-primary/10" : "bg-secondary"
@@ -186,7 +83,6 @@ export function ImageDropzone({ onImageSelect, className }: ImageDropzoneProps) 
           )} strokeWidth={1.5} />
         </div>
 
-        {/* Text */}
         <div className="text-center">
           <p className="text-sm font-medium text-foreground">
             {isDragging ? "Release to upload" : "Drop image here"}
@@ -195,7 +91,6 @@ export function ImageDropzone({ onImageSelect, className }: ImageDropzoneProps) 
         </div>
       </motion.div>
 
-      {/* URL Input */}
       <div className="absolute bottom-4 z-20 pointer-events-auto">
         <AnimatePresence mode="wait">
           {!showUrlInput ? (
@@ -230,6 +125,8 @@ export function ImageDropzone({ onImageSelect, className }: ImageDropzoneProps) 
               />
               <button 
                 type="submit" 
+                disabled={loading}
+                aria-label={loading ? "Loading image" : "Load image URL"}
                 className="w-6 h-6 rounded bg-primary text-primary-foreground flex items-center justify-center hover:bg-primary-hover transition-colors"
               >
                 <Upload size={12} />

@@ -1,329 +1,157 @@
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
-import { motion, AnimatePresence } from 'framer-motion';
-import { Download, Loader2, Copy, Check } from 'lucide-react';
-import { cn } from "@/lib/utils";
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { motion } from 'framer-motion';
+import { Download, Loader2 } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { animationFrame } from '@/lib/image-engine/animation';
+import { Select } from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
+import {ImageTransfer,ImageCopyButton,ImageShareButton,ImageDragSurface} from '@/components/image-transfer';
+import {filenameFor} from '@/lib/image-transfer/transfer';
+import { defaultExportOptions, type ExportOptions, type ExportResult, type ImageInfo, type ImageInput, type Preview } from '@/lib/image-engine/types';
 
 interface WorkspacePreviewProps {
-  original: string;
-  processed: string | null;
+  original: ImageInput;
+  preview: Preview | null;
+  info: ImageInfo | null;
   isProcessing: boolean;
+  isExporting: boolean;
+  error: string | null;
+  onExport: (options: ExportOptions) => Promise<ExportResult>;
+  onPrepare: (options: ExportOptions) => Promise<ExportResult>;
 }
 
-function formatFileSize(dataUrl: string): string {
-  // Estimate size from base64 data URL
-  const base64 = dataUrl.split(',')[1];
-  if (!base64) return '';
-  const bytes = Math.ceil((base64.length * 3) / 4);
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+function formatSize(size: number) {
+  return size < 1024 ? size + ' B' : size < 1024 * 1024 ? (size / 1024).toFixed(1) + ' KB' : (size / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
-function getImageType(dataUrl: string): string {
-  if (dataUrl.includes('image/gif')) return 'GIF';
-  if (dataUrl.includes('image/png')) return 'PNG';
-  if (dataUrl.includes('image/jpeg') || dataUrl.includes('image/jpg')) return 'JPG';
-  if (dataUrl.includes('image/webp')) return 'WEBP';
-  if (dataUrl.startsWith('http')) return 'URL';
-  return 'Image';
-}
+export function WorkspacePreview({ original, preview, info, isProcessing, isExporting, error, onExport, onPrepare }: WorkspacePreviewProps) {
+  const [transferring,setTransferring]=useState(false);
+  const [options, setOptions] = useState<ExportOptions>(defaultExportOptions);
+  const [exportSize, setExportSize] = useState<number | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const busy = isProcessing || isExporting || transferring;
+  const animated = info?.animated ?? original.format === 'gif';
+  const chosenFormat = options.format === 'auto' ? animated ? 'gif' : 'png' : options.format;
+  const gif=animated||original.format==='gif';
+  const getTransferFile=useCallback(async()=>{
+    const result=await onPrepare({...defaultExportOptions,format:gif?'gif':'png',dither:options.dither});
+    return new File([result.blob],filenameFor(original.name,result.blob.type),{type:result.blob.type});
+  },[onPrepare,gif,options.dither,original.name]);
+  const getOriginalFile=useCallback(async()=>new File([original.blob],filenameFor(original.name,original.blob.type,''),{type:original.blob.type}),[original]);
 
-export function WorkspacePreview({ original, processed, isProcessing }: WorkspacePreviewProps) {
-  const [copied, setCopied] = useState(false);
-  const [isVertical, setIsVertical] = useState(false);
-  
-  useEffect(() => {
-    const checkOrientation = () => {
-      setIsVertical(window.innerWidth < 768); // md breakpoint
-    };
-    
-    checkOrientation();
-    window.addEventListener('resize', checkOrientation);
-    return () => window.removeEventListener('resize', checkOrientation);
-  }, []);
-  
-  const originalInfo = useMemo(() => ({
-    type: getImageType(original),
-    size: formatFileSize(original)
-  }), [original]);
-
-  const processedInfo = useMemo(() => {
-    if (!processed) return null;
-    return {
-      type: getImageType(processed),
-      size: formatFileSize(processed)
-    };
-  }, [processed]);
-
-  const handleDownload = () => {
-    if (!processed) return;
-    const link = document.createElement('a');
-    link.href = processed;
-    let ext = 'png'; // default
-    if (processed.includes('image/gif')) {
-      ext = 'gif';
-    } else if (processed.includes('image/jpeg') || processed.includes('image/jpg')) {
-      ext = 'jpg';
-    } else if (processed.includes('image/webp')) {
-      ext = 'webp';
-    } else if (processed.includes('image/png')) {
-      ext = 'png';
-    }
-    link.download = `optic-${Date.now()}.${ext}`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const handleCopy = async () => {
-    if (!processed) return;
-    
-    const isGif = processed.includes('image/gif');
-    
+  const handleDownload = async () => {
+    setActionError(null);
     try {
-      if (isGif) {
-        // For GIF: Try multiple workarounds to copy
-        const response = await fetch(processed);
-        const gifBlob = await response.blob();
-        
-        // Method 1: Try copying GIF blob with different MIME type combinations
-        if (navigator.clipboard && window.ClipboardItem) {
-          // Try with 'image/png' wrapper (some browsers might accept)
-          try {
-            const item = new ClipboardItem({ 
-              'image/png': gifBlob,
-              'image/gif': gifBlob 
-            });
-            await navigator.clipboard.write([item]);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-            return;
-          } catch (err1) {
-            // Method 2: Create a temporary img element and use execCommand
-            try {
-              const tempImg = document.createElement('img');
-              tempImg.src = processed;
-              tempImg.style.cssText = 'position:fixed;left:-9999px;opacity:0;pointer-events:none;';
-              document.body.appendChild(tempImg);
-              
-              await new Promise((resolve) => {
-                if (tempImg.complete) {
-                  resolve(undefined);
-                } else {
-                  tempImg.onload = resolve;
-                  tempImg.onerror = resolve;
-                  setTimeout(resolve, 3000);
-                }
-              });
-              
-              // Try to copy the image element
-              const range = document.createRange();
-              range.selectNode(tempImg);
-              const selection = window.getSelection();
-              if (selection) {
-                selection.removeAllRanges();
-                selection.addRange(range);
-                
-                const copied = document.execCommand('copy');
-                selection.removeAllRanges();
-                
-                if (copied) {
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 2000);
-                  document.body.removeChild(tempImg);
-                  return;
-                }
-              }
-              
-              document.body.removeChild(tempImg);
-            } catch (err2) {
-              // Method 3: Fallback to PNG (first frame)
-              const img = new Image();
-              img.crossOrigin = 'anonymous';
-              img.src = processed;
-              
-              await new Promise((resolve) => {
-                img.onload = resolve;
-                img.onerror = resolve;
-                setTimeout(resolve, 3000);
-              });
-              
-              const canvas = document.createElement('canvas');
-              canvas.width = img.width;
-              canvas.height = img.height;
-              const ctx = canvas.getContext('2d');
-              
-              if (ctx) {
-                ctx.drawImage(img, 0, 0);
-                canvas.toBlob(async (pngBlob) => {
-                  if (pngBlob && navigator.clipboard && window.ClipboardItem) {
-                    try {
-                      const item = new ClipboardItem({ 'image/png': pngBlob });
-                      await navigator.clipboard.write([item]);
-                      setCopied(true);
-                      setTimeout(() => setCopied(false), 2000);
-                    } catch (err3) {
-                      console.warn('GIF copying limited by browser. Use Export for full GIF.');
-                      setCopied(true);
-                      setTimeout(() => setCopied(false), 2000);
-                    }
-                  }
-                }, 'image/png');
-              }
-            }
-          }
-        }
-      } else {
-        // For non-GIF images, use Clipboard API normally
-        const response = await fetch(processed);
-        const blob = await response.blob();
-        
-        if (navigator.clipboard && window.ClipboardItem) {
-          const item = new ClipboardItem({ [blob.type]: blob });
-          await navigator.clipboard.write([item]);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-        }
-      }
-    } catch (err) {
-      console.error('Failed to copy image:', err);
-    }
+      const result = await onExport(options);
+      const url = URL.createObjectURL(result.blob), link = document.createElement('a');
+      link.href = url;
+      link.download = original.name.replace(/\.[^.]*$/, '') + '-optic.' + (result.format === 'jpeg' ? 'jpg' : result.format);
+      document.body.appendChild(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setExportSize(result.blob.size);
+    } catch (error) { setActionError(error instanceof Error ? error.message : 'Export failed.'); }
   };
 
   return (
+    <ImageTransfer getFile={getTransferFile} disabled={!preview||isProcessing||isExporting||transferring} onError={setActionError} onWorkingChange={setTransferring}>
     <div className="relative w-full h-full flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-        <div className="flex items-center gap-4 text-xs text-muted">
-          <span>{originalInfo.type}</span>
-          {originalInfo.size && (
-            <>
-              <span className="w-px h-3 bg-border" />
-              <span>{originalInfo.size}</span>
-            </>
-          )}
-          {processedInfo && processedInfo.size !== originalInfo.size && (
-            <>
-              <span className="w-px h-3 bg-border" />
-              <span className="text-primary">→ {processedInfo.size}</span>
-            </>
-          )}
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-border">
+        <div className="flex items-center gap-3 text-xs text-muted">
+          <span>{original.format === 'jpeg' ? 'JPG' : original.format.toUpperCase()}</span>
+          <span>{formatSize(original.blob.size)}</span>
+          {info && <span>{info.width} × {info.height}{info.animated ? ' · ' + info.frameCount + ' frames' : ''}</span>}
+          {preview && <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px]"
+            title={preview.fallbackReason || (preview.gpu?.renderer ?? 'WebGL 2 rendering')}>
+            {preview.backend === 'cpu' ? 'CPU' : preview.gpu?.acceleration === 'software' ? 'WebGL · Software' : preview.gpu?.acceleration === 'hardware' ? 'GPU' : 'WebGL 2'}
+          </span>}
+          {exportSize !== null && <span className="text-primary">→ {formatSize(exportSize)}</span>}
         </div>
-        
         <div className="flex items-center gap-2">
-          <motion.button 
-            whileTap={{ scale: 0.95 }}
-            onClick={handleCopy}
-            disabled={!processed || isProcessing}
-            className={cn(
-              "btn-secondary flex items-center gap-2 text-xs py-1.5 px-3",
-              (!processed || isProcessing) && "opacity-50 cursor-not-allowed"
-            )}
-            title="Copy image to clipboard"
-          >
-            {copied ? <Check size={14} /> : <Copy size={14} />}
-            {copied ? 'Copied' : 'Copy'}
-          </motion.button>
-          
-          <motion.button 
-            whileTap={{ scale: 0.95 }}
-            onClick={handleDownload}
-            disabled={!processed || isProcessing}
-            className={cn(
-              "btn-primary flex items-center gap-2 text-xs py-1.5 px-3",
-              (!processed || isProcessing) && "opacity-50 cursor-not-allowed"
-            )}
-          >
-            <Download size={14} />
+          <ImageCopyButton />
+          <motion.button whileTap={{ scale: 0.95 }} onClick={handleDownload} disabled={!preview || busy}
+            className={cn('btn-primary flex items-center gap-2 text-xs py-1.5 px-3', (!preview || busy) && 'opacity-50 cursor-not-allowed')}>
+            {isExporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
             Export
           </motion.button>
+          <ImageShareButton />
         </div>
       </div>
-
-      {/* Preview Area */}
-      <div className="flex-1 flex flex-col md:flex-row gap-3 p-4 overflow-auto">
-        {/* Original */}
-        <motion.div 
-          initial={{ opacity: 0, x: isVertical ? 0 : -10, y: isVertical ? -10 : 0 }}
-          animate={{ opacity: 1, x: 0, y: 0 }}
-          className="flex-1 relative rounded-xl overflow-hidden bg-secondary/30 flex items-center justify-center min-h-0"
-        >
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 border-b border-border text-xs">
+        <div className="flex items-center gap-2 text-muted">
+          <span>Format</span>
+          <Select label="Export format" value={options.format}
+            onValueChange={format => setOptions(previous => ({ ...previous, format: format as ExportOptions['format'] }))}
+            options={[{ value: 'auto', label: 'Auto' },
+              ...(!animated ? [{ value: 'png', label: 'PNG' }, { value: 'jpeg', label: 'JPEG' }, { value: 'webp', label: 'WebP' }] : []),
+              { value: 'gif', label: 'GIF' }]} />
+        </div>
+        {chosenFormat === 'jpeg' && <label className="flex items-center gap-2 text-muted">Background
+          <input aria-label="JPEG background" type="color" value={options.background} onChange={event => setOptions(previous => ({ ...previous, background: event.target.value }))} className="w-7 h-6 bg-transparent" />
+        </label>}
+        {chosenFormat === 'webp' && <Checkbox label="Lossless" checked={options.lossless}
+          onCheckedChange={lossless => setOptions(previous => ({ ...previous, lossless }))} />}
+        {(chosenFormat === 'jpeg' || (chosenFormat === 'webp' && !options.lossless)) && <label className="flex items-center gap-2 text-muted">Quality {options.quality}%
+          <input aria-label="Export quality" type="range" min={1} max={100} value={options.quality} onChange={event => setOptions(previous => ({ ...previous, quality: Number(event.target.value) }))} className="w-24" />
+        </label>}
+        {chosenFormat === 'gif' && <Checkbox label="Dither new colors" checked={options.dither}
+          onCheckedChange={dither => setOptions(previous => ({ ...previous, dither }))} />}
+        {chosenFormat === 'gif' && <span className="text-muted">GIF uses palette colors and binary transparency.</span>}
+      </div>
+      {(error || actionError) && <p role="alert" className="px-4 py-2 text-sm text-destructive">{error || actionError}</p>}
+      <div className="flex-1 flex flex-col md:flex-row gap-3 p-4 overflow-auto min-h-0">
+        <div className="flex-1 relative rounded-xl overflow-hidden bg-secondary/30 flex items-center justify-center min-h-[140px] md:min-h-0">
           <CheckerboardBg />
-          <img 
-            src={original} 
-            alt="Original" 
-            className="relative z-10 max-w-full max-h-full object-contain" 
-          />
-        </motion.div>
-
-        {/* Processed */}
-        <motion.div 
-          initial={{ opacity: 0, x: isVertical ? 0 : 10, y: isVertical ? 10 : 0 }}
-          animate={{ opacity: 1, x: 0, y: 0 }}
-          className="flex-1 relative rounded-xl overflow-hidden bg-secondary/30 flex items-center justify-center min-h-0"
-        >
+          <ImageTransfer getFile={getOriginalFile} disabled={transferring||isExporting} onError={setActionError} onWorkingChange={setTransferring}>
+          <ImageDragSurface className="relative z-10 flex h-full w-full items-center justify-center">
+          <img src={original.url} alt="Original" draggable={false} style={info ? {width:info.width,height:info.height} : undefined}
+            className="relative z-10 max-w-full max-h-full object-contain" />
+          </ImageDragSurface>
+          </ImageTransfer>
+        </div>
+        <div className="flex-1 relative rounded-xl overflow-hidden bg-secondary/30 flex items-center justify-center min-h-[140px] md:min-h-0">
           <CheckerboardBg />
-          
-          {/* Processing overlay */}
-          <AnimatePresence>
-            {isProcessing && (
-              <motion.div 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="absolute inset-0 flex items-center justify-center bg-background/50 backdrop-blur-sm z-30"
-              >
-                <Loader2 className="w-6 h-6 text-primary animate-spin" />
-              </motion.div>
-            )}
-          </AnimatePresence>
-          
-          {processed ? (
-            <ProcessedImage 
-              src={processed}
-              isProcessing={isProcessing}
-            />
-          ) : !isProcessing && (
-            <div className="text-muted text-xs">Waiting...</div>
-          )}
-        </motion.div>
+          {preview && <ImageDragSurface className="relative z-10 flex h-full w-full items-center justify-center"><FramePreview preview={preview} /></ImageDragSurface>}
+          {isProcessing && <div className="absolute inset-0 flex items-center justify-center bg-background/40 z-30"><Loader2 className="w-6 h-6 text-primary animate-spin" /></div>}
+        </div>
       </div>
     </div>
+    </ImageTransfer>
   );
 }
 
-function ProcessedImage({ src, isProcessing }: { src: string, isProcessing: boolean }) {
-  return (
-    <motion.img 
-      key={src}
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      src={src} 
-      alt="Processed" 
-      className={cn(
-        "relative z-10 max-w-full max-h-full object-contain",
-        isProcessing && "opacity-50"
-      )}
-    />
-  );
+function FramePreview({ preview }: { preview: Preview }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useLayoutEffect(() => {
+    const canvas = ref.current, context = canvas?.getContext('2d');
+    if (!canvas || !context || !preview.frames.length) return;
+    canvas.width = preview.width; canvas.height = preview.height;
+    let frameId = 0, last = -1, active = true;
+    const started = performance.now();
+    const draw = (now: number) => {
+      if (!active) return;
+      const frame = animationFrame(now - started, preview.delays, preview.iterations);
+      const bitmap = preview.frames[frame.index];
+      if (!bitmap?.width || !bitmap.height) return;
+      if (frame.index !== last) {
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(bitmap, 0, 0); last = frame.index;
+      }
+      if (preview.frames.length > 1 && !frame.finished) frameId = requestAnimationFrame(draw);
+    };
+    draw(started);
+    return () => { active = false; cancelAnimationFrame(frameId); };
+  }, [preview]);
+  return <canvas ref={ref} role="img" aria-label="Processed" data-backend={preview.backend}
+    data-gpu-renderer={preview.gpu?.renderer} data-fallback-reason={preview.fallbackReason}
+    style={{width:preview.displayWidth,height:preview.displayHeight}}
+    className="relative z-10 max-w-full max-h-full object-contain" />;
 }
 
 function CheckerboardBg() {
-  return (
-    <div 
-      className="absolute inset-0 opacity-[0.02]" 
-      style={{
-        backgroundImage: `
-          linear-gradient(45deg, currentColor 25%, transparent 25%),
-          linear-gradient(-45deg, currentColor 25%, transparent 25%),
-          linear-gradient(45deg, transparent 75%, currentColor 75%),
-          linear-gradient(-45deg, transparent 75%, currentColor 75%)
-        `,
-        backgroundSize: '16px 16px',
-        backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px'
-      }}
-    />
-  );
+  return <div className="absolute inset-0 opacity-[0.05]" style={{
+    backgroundImage: 'linear-gradient(45deg, currentColor 25%, transparent 25%), linear-gradient(-45deg, currentColor 25%, transparent 25%), linear-gradient(45deg, transparent 75%, currentColor 75%), linear-gradient(-45deg, transparent 75%, currentColor 75%)',
+    backgroundSize: '16px 16px', backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px',
+  }} />;
 }

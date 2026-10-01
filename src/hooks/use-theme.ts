@@ -10,13 +10,11 @@ export function useTheme() {
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>('light');
   const [mounted, setMounted] = useState(false);
 
-  // Get system preference
   const getSystemTheme = useCallback((): ResolvedTheme => {
     if (typeof window === 'undefined') return 'light';
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   }, []);
 
-  // Apply theme to document
   const applyTheme = useCallback((theme: ResolvedTheme) => {
     const root = document.documentElement;
     if (theme === 'dark') {
@@ -27,7 +25,6 @@ export function useTheme() {
     setResolvedTheme(theme);
   }, []);
 
-  // Initialize
   useEffect(() => {
     const stored = localStorage.getItem('optic-theme-mode') as ThemeMode | null;
     const initialMode = stored || 'system';
@@ -39,7 +36,6 @@ export function useTheme() {
     setMounted(true);
   }, [getSystemTheme, applyTheme]);
 
-  // Listen for system theme changes
   useEffect(() => {
     if (!mounted) return;
     
@@ -54,7 +50,6 @@ export function useTheme() {
     return () => mediaQuery.removeEventListener('change', handleChange);
   }, [mode, mounted, getSystemTheme, applyTheme]);
 
-  // Update theme when mode changes
   useEffect(() => {
     if (!mounted) return;
     
