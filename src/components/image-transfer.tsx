@@ -1,29 +1,35 @@
 'use client';
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type DragEvent, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useState, useSyncExternalStore, type DragEvent, type ReactNode } from 'react';
 import { Check, Copy, Loader2, Share2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { addFileToDrag, canShareFile, copyFullImage, shareFullImage } from '@/lib/image-transfer/transfer';
+import { ImageActionButton } from '@/components/ui/image-action-button';
+import { canShareFile, copyFullImage, imageCopyUnavailableReason, imageDragUrl, shareFullImage } from '@/lib/image-transfer/transfer';
 
 class Resource {
   file: File | null = null;
   url: string | null = null;
+  image: HTMLImageElement | null = null;
   private pending: Promise<File> | null = null;
   private disposed = false;
-  private dragged = false;
 
   constructor(private readonly factory: () => Promise<File>) {}
 
   activate() { this.disposed = false; }
-  markDragged() { this.dragged = true; }
 
   prepare() {
     if (this.file) return Promise.resolve(this.file);
     if (!this.pending) {
-      this.pending = this.factory().then(file => {
+      this.pending = this.factory().then(async file => {
+        if (this.disposed) throw new Error('Processing cancelled');
+        const url = await imageDragUrl(file);
+        const image = new Image();
+        image.src = url;
+        await image.decode();
         if (this.disposed) throw new Error('Processing cancelled');
         this.file = file;
-        this.url = URL.createObjectURL(file);
+        this.url = url;
+        this.image = image;
         return file;
       }).finally(() => { this.pending = null; });
     }
@@ -32,11 +38,9 @@ class Resource {
 
   dispose() {
     this.disposed = true;
-    if (this.url) {
-      const url = this.url;
-      if (this.dragged) setTimeout(() => URL.revokeObjectURL(url), 60000);
-      else URL.revokeObjectURL(url);
-    }
+    this.file = null;
+    this.url = null;
+    this.image = null;
   }
 }
 
@@ -44,6 +48,9 @@ type TransferContext = {
   file: File | null;
   url: string | null;
   ready: boolean;
+  available: boolean;
+  mimeType: string;
+  copyUnavailableReason: string | null;
   working: boolean;
   action: 'copy' | 'share' | null;
   copied: boolean;
@@ -56,14 +63,20 @@ type TransferContext = {
 
 const Context = createContext<TransferContext | null>(null);
 
+function subscribeClipboardSupport(listener: () => void) {
+  window.addEventListener('focus', listener);
+  return () => window.removeEventListener('focus', listener);
+}
+
 function useTransfer() {
   const context = useContext(Context);
   if (!context) throw new Error('Image transfer controls need an ImageTransfer provider.');
   return context;
 }
 
-export function ImageTransfer({ getFile, disabled = false, onError, onWorkingChange, children }: {
+export function ImageTransfer({ getFile, mimeType, disabled = false, onError, onWorkingChange, children }: {
   getFile: () => Promise<File>;
+  mimeType: string;
   disabled?: boolean;
   onError: (message: string) => void;
   onWorkingChange?: (working: boolean) => void;
@@ -77,6 +90,8 @@ export function ImageTransfer({ getFile, disabled = false, onError, onWorkingCha
   const working = action !== null;
   const file = version === resource ? resource.file : null;
   const ready = !!file && !disabled && !working;
+  const copyUnavailableReason = useSyncExternalStore(subscribeClipboardSupport,
+    () => imageCopyUnavailableReason(mimeType), () => 'Checking clipboard support…');
 
   const report = useCallback((error: unknown) => {
     if (error instanceof Error && error.message === 'Processing cancelled') return;
@@ -116,24 +131,26 @@ export function ImageTransfer({ getFile, disabled = false, onError, onWorkingCha
   };
 
   const copy = () => {
-    if (!file) {
-      void prepare().catch(report);
-      onError('Preparing the complete image. Try Copy again in a moment.');
-      return;
-    }
-    run(() => copyFullImage(file), 'copy');
+    if (disabled || working || copyUnavailableReason) return;
+    run(() => copyFullImage(file || prepare(), mimeType, () => resource.image), 'copy');
   };
   const share = () => { if (file) run(() => shareFullImage(file), 'share'); };
   const drag = (event: DragEvent<HTMLElement>) => {
-    if (!file || !resource.url || !ready) { event.preventDefault(); return; }
-    resource.markDragged();
-    addFileToDrag(event.dataTransfer, file, resource.url, event.target instanceof HTMLImageElement);
-    const preview = event.currentTarget.querySelector('canvas');
-    if (preview) event.dataTransfer.setDragImage(preview, preview.width / 2, preview.height / 2);
+    const image = event.target;
+    if (!file?.size || !ready || !(image instanceof HTMLImageElement) || !image.complete || !image.naturalWidth) {
+      event.preventDefault(); return;
+    }
+    event.dataTransfer.effectAllowed = 'copy';
+    const preview = event.currentTarget.querySelector<HTMLCanvasElement | HTMLImageElement>('canvas, img:not([data-transfer-image])');
+    if (preview) {
+      const bounds = preview.getBoundingClientRect();
+      event.dataTransfer.setDragImage(preview, bounds.width / 2, bounds.height / 2);
+    }
   };
 
   return <Context.Provider value={{
-    file, url: resource.url, ready, working, action, copied: copiedResource === resource,
+    file, url: resource.url, ready, available: !disabled && !working, mimeType, copyUnavailableReason,
+    working, action, copied: copiedResource === resource,
     canShare: sharing === resource, copy, share, drag,
     prepare: () => { if (!disabled) void prepare().catch(report); },
   }}>{children}</Context.Provider>;
@@ -141,32 +158,40 @@ export function ImageTransfer({ getFile, disabled = false, onError, onWorkingCha
 
 export function ImageCopyButton() {
   const transfer = useTransfer();
-  const label = transfer.file?.type === 'image/gif' ? 'Copy GIF' : 'Copy';
-  return <button type="button" onClick={transfer.copy} disabled={!transfer.ready}
-    title="Copy the complete image to the clipboard"
-    className={cn('btn-secondary flex items-center gap-2 text-xs py-1.5 px-3', !transfer.ready && 'opacity-50 cursor-not-allowed')}>
+  const descriptionId = useId();
+  const unsupported = !!transfer.copyUnavailableReason;
+  const label = transfer.mimeType === 'image/gif' ? 'Copy GIF' : 'Copy';
+  const disabled = !transfer.available || unsupported;
+  return <span title={transfer.copyUnavailableReason || 'Copy the complete image to the clipboard'} className="inline-flex">
+    <ImageActionButton onClick={transfer.copy} disabled={disabled}
+    aria-label={label} aria-describedby={unsupported ? descriptionId : undefined}
+    >
     {transfer.action === 'copy' ? <Loader2 size={14} className="animate-spin" /> : transfer.copied ? <Check size={14} /> : <Copy size={14} />}
     {transfer.action === 'copy' ? 'Copying…' : transfer.copied ? 'Copied' : label}
-  </button>;
+  </ImageActionButton>
+    {unsupported && <span id={descriptionId} className="sr-only">{transfer.copyUnavailableReason}</span>}
+  </span>;
 }
 
 export function ImageShareButton() {
   const transfer = useTransfer();
-  return <button type="button" onClick={transfer.share} disabled={!transfer.ready || !transfer.canShare}
-    title={transfer.canShare ? 'Share the complete image using your device' : 'File sharing is unavailable or the image is still being prepared'}
-    className="btn-secondary flex items-center gap-2 text-xs py-1.5 px-3 disabled:opacity-50">
+  return <ImageActionButton onClick={transfer.share} disabled={!transfer.ready || !transfer.canShare}
+    title={transfer.canShare ? 'Share the complete image using your device' : 'File sharing is unavailable or the image is still being prepared'}>
     {transfer.action === 'share' ? <Loader2 size={14} className="animate-spin" /> : <Share2 size={14} />}Share
-  </button>;
+  </ImageActionButton>;
 }
 
 export function ImageDragSurface({ children, className }: { children: ReactNode; className?: string }) {
   const transfer = useTransfer();
-  return <div draggable={transfer.ready} data-transfer-mode={transfer.ready ? 'web' : 'preparing'}
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  const ready = transfer.ready && !!transfer.url && loadedUrl === transfer.url;
+  return <div draggable={false} data-transfer-mode={ready ? 'web' : 'preparing'}
     onDragStart={transfer.drag} onPointerEnter={transfer.prepare}
-    title={transfer.ready ? 'Drag the complete image to another app or input' : 'Preparing the complete image for dragging'}
-    className={cn(className, 'select-none', transfer.ready && 'cursor-grab active:cursor-grabbing', transfer.working && 'opacity-70')}>
+    title={ready ? 'Drag the complete image to another app or input' : 'Preparing the complete image for dragging'}
+    className={cn(className, 'select-none', ready && 'cursor-grab active:cursor-grabbing', transfer.working && 'opacity-70')}>
     {children}
-    {transfer.ready && transfer.url && <img src={transfer.url} alt="" aria-hidden="true" draggable
+    {transfer.url && <img src={transfer.url} alt="" aria-hidden="true" data-transfer-image
+      onLoad={event => setLoadedUrl(event.currentTarget.currentSrc)} draggable={ready}
       className="absolute inset-0 z-20 h-full w-full object-contain opacity-0" />}
   </div>;
 }

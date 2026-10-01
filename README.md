@@ -128,10 +128,12 @@ npm run dev
 
 - **Input**: JPEG, PNG, WebP, GIF, AVIF, BMP and TIFF (detected by content)
 - **Output**: PNG, JPEG, WebP and GIF; Auto preserves unedited source bytes and selects PNG / GIF after editing
-- **Clipboard**: PNG for static images; complete GIF copying requires browser support for the GIF clipboard format
+- **Clipboard**: PNG for static images; GIF uses native format support or the previous version's image-selection copy path with complete GIF data
 - **Transfer**: drag the prepared image file or use the browser's device share sheet when supported
 
-Optic is a browser application. The reusable `ImageTransfer` component accepts a factory for a complete encoded file and uses the Clipboard, Web Share and HTML drag APIs. Unsupported GIF clipboard formats produce a visible error instead of copying a poster frame. Dragging into another application depends on that application's browser file-drop support. The Share control remains visible to the right of Export and is disabled when file sharing is unavailable.
+Optic is a browser application. The reusable `ImageTransfer` component accepts a factory for a complete encoded file and its MIME type, and uses the Clipboard, Web Share and HTML drag APIs. Dragging uses a loaded image containing the complete encoded bytes in a data URL, including every GIF frame. Browser image drag data is preserved without overriding it with a blob download URL or a JavaScript-generated file. Dragging into another application still depends on that application's image-drop support.
+
+Static images can be copied while their PNG is being prepared: the clipboard receives a promise inside the click gesture. GIF copying preserves the previous version's image-selection and `execCommand('copy')` compatibility path. If the image is still being prepared, the HTML clipboard receives a promise containing an image with all the encoded GIF bytes. Receiving applications decide whether to use the animated image or a browser-provided static representation. Failed copying is reported rather than showing a false success. Copy, Export and Share use the same button component; Share remains visible to the right of Export and is disabled when file sharing is unavailable.
 
 GIF has at most 256 colors per palette and binary transparency. Filters that add colors or semi-transparent pixels require quantization and an alpha threshold when exporting GIF. PNG and lossless WebP preserve full alpha for static images.
 
@@ -147,7 +149,7 @@ npx tsc --noEmit
 npm run build
 ```
 
-The header reports GPU, software WebGL, or CPU based on the actual renderer. CPU fallbacks include a diagnostic reason in the preview attributes and worker console. ImageMagick's file decoding, GIF palette quantization and compression still run in WASM on the CPU; the shader effects run on the GPU. Pixel-exact indexed GIF and lossless geometry paths do not need shader processing.
+Renderer diagnostics and CPU fallback reasons remain available in the preview attributes and worker console. ImageMagick's file decoding, GIF palette quantization and compression run in WASM on the CPU; shader effects run on the GPU. Pixel-exact indexed GIF and lossless geometry paths do not need shader processing.
 
 ## Privacy
 

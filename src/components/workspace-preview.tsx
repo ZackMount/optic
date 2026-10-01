@@ -1,9 +1,8 @@
 "use client";
 
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
-import { motion } from 'framer-motion';
 import { Download, Loader2 } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { ImageActionButton } from '@/components/ui/image-action-button';
 import { animationFrame } from '@/lib/image-engine/animation';
 import { Select } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -34,7 +33,7 @@ export function WorkspacePreview({ original, preview, info, isProcessing, isExpo
   const busy = isProcessing || isExporting || transferring;
   const animated = info?.animated ?? original.format === 'gif';
   const chosenFormat = options.format === 'auto' ? animated ? 'gif' : 'png' : options.format;
-  const gif=animated||original.format==='gif';
+  const gif=animated;
   const getTransferFile=useCallback(async()=>{
     const result=await onPrepare({...defaultExportOptions,format:gif?'gif':'png',dither:options.dither});
     return new File([result.blob],filenameFor(original.name,result.blob.type),{type:result.blob.type});
@@ -55,26 +54,21 @@ export function WorkspacePreview({ original, preview, info, isProcessing, isExpo
   };
 
   return (
-    <ImageTransfer getFile={getTransferFile} disabled={!preview||isProcessing||isExporting||transferring} onError={setActionError} onWorkingChange={setTransferring}>
+    <ImageTransfer getFile={getTransferFile} mimeType={gif?'image/gif':'image/png'} disabled={!preview||isProcessing||isExporting||transferring} onError={setActionError} onWorkingChange={setTransferring}>
     <div className="relative w-full h-full flex flex-col">
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-border">
         <div className="flex items-center gap-3 text-xs text-muted">
           <span>{original.format === 'jpeg' ? 'JPG' : original.format.toUpperCase()}</span>
           <span>{formatSize(original.blob.size)}</span>
           {info && <span>{info.width} × {info.height}{info.animated ? ' · ' + info.frameCount + ' frames' : ''}</span>}
-          {preview && <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px]"
-            title={preview.fallbackReason || (preview.gpu?.renderer ?? 'WebGL 2 rendering')}>
-            {preview.backend === 'cpu' ? 'CPU' : preview.gpu?.acceleration === 'software' ? 'WebGL · Software' : preview.gpu?.acceleration === 'hardware' ? 'GPU' : 'WebGL 2'}
-          </span>}
           {exportSize !== null && <span className="text-primary">→ {formatSize(exportSize)}</span>}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <ImageCopyButton />
-          <motion.button whileTap={{ scale: 0.95 }} onClick={handleDownload} disabled={!preview || busy}
-            className={cn('btn-primary flex items-center gap-2 text-xs py-1.5 px-3', (!preview || busy) && 'opacity-50 cursor-not-allowed')}>
+          <ImageActionButton onClick={handleDownload} disabled={!preview || busy}>
             {isExporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
             Export
-          </motion.button>
+          </ImageActionButton>
           <ImageShareButton />
         </div>
       </div>
@@ -97,13 +91,12 @@ export function WorkspacePreview({ original, preview, info, isProcessing, isExpo
         </label>}
         {chosenFormat === 'gif' && <Checkbox label="Dither new colors" checked={options.dither}
           onCheckedChange={dither => setOptions(previous => ({ ...previous, dither }))} />}
-        {chosenFormat === 'gif' && <span className="text-muted">GIF uses palette colors and binary transparency.</span>}
       </div>
       {(error || actionError) && <p role="alert" className="px-4 py-2 text-sm text-destructive">{error || actionError}</p>}
       <div className="flex-1 flex flex-col md:flex-row gap-3 p-4 overflow-auto min-h-0">
         <div className="flex-1 relative rounded-xl overflow-hidden bg-secondary/30 flex items-center justify-center min-h-[140px] md:min-h-0">
           <CheckerboardBg />
-          <ImageTransfer getFile={getOriginalFile} disabled={transferring||isExporting} onError={setActionError} onWorkingChange={setTransferring}>
+          <ImageTransfer getFile={getOriginalFile} mimeType={original.blob.type} disabled={transferring||isExporting} onError={setActionError} onWorkingChange={setTransferring}>
           <ImageDragSurface className="relative z-10 flex h-full w-full items-center justify-center">
           <img src={original.url} alt="Original" draggable={false} style={info ? {width:info.width,height:info.height} : undefined}
             className="relative z-10 max-w-full max-h-full object-contain" />
