@@ -1,6 +1,7 @@
 import { GifReader, GifWriter, type GifOptions, type FrameOptions } from 'omggif';
 import { dimensions, type Transformations } from './types';
 import { sourcePoint } from './pixels';
+import { scaledFrameDelay } from './animation';
 
 const emptyControl = new Uint8Array([0x21, 0xf9, 4, 0, 0, 0, 0, 0]);
 function normalizeControls(bytes: Uint8Array) {
@@ -96,10 +97,11 @@ export function transformGif(bytes: Uint8Array, t: Transformations): Uint8Array 
     if (t.rotation === 90) [x, y] = [reader.height - y - frame.height, x];
     else if (t.rotation === 180) [x, y] = [reader.width - x - frame.width, reader.height - y - frame.height];
     else if (t.rotation === 270) [x, y] = [y, reader.width - x - frame.width];
-    const frameOptions: FrameOptions = { delay: frame.delay, disposal: frame.disposal };
+    const delay = scaledFrameDelay(frame.delay * 10, t.gifSpeed) / 10;
+    const frameOptions: FrameOptions = { delay, disposal: frame.disposal };
     if (frame.has_local_palette) frameOptions.palette = palette;
     if (frame.transparent_index !== null) frameOptions.transparent = frame.transparent_index;
-    if (!frame.delay && !frame.disposal && frame.transparent_index === null) {
+    if (!delay && !frame.disposal && frame.transparent_index === null) {
       const position = writer.getOutputBufferPosition(); output.set(emptyControl, position);
       writer.setOutputBufferPosition(position + emptyControl.length);
     }

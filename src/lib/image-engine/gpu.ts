@@ -1,32 +1,13 @@
 import { ByteCache } from './cache';
 import { gaussianKernel } from './pixels';
+import { colorGrades, gpuArtStyles, hexColor } from './creative';
+import { geometryShader, colorShader } from './shaders';
 import { dimensions, type GpuInfo, type Raster, type Transformations } from './types';
 
 const vertex = `#version 300 es
 void main() {
   vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
-}`;
-const geometryShader = `#version 300 es
-precision highp float;
-precision highp int;
-uniform sampler2D uImage;
-uniform ivec2 uSource;
-uniform int uRotation;
-uniform ivec2 uFlip;
-uniform int uPixelate;
-uniform ivec2 uSize;
-out vec4 color;
-void main() {
-  ivec2 p = ivec2(gl_FragCoord.xy);
-  p = min(uSize - 1, (p / uPixelate) * uPixelate + uPixelate / 2);
-  ivec2 q = p;
-  if (uRotation == 90) q = ivec2(p.y, uSource.y - 1 - p.x);
-  if (uRotation == 180) q = uSource - 1 - p;
-  if (uRotation == 270) q = ivec2(uSource.x - 1 - p.y, p.x);
-  if (uFlip.x == 1) q.x = uSource.x - 1 - q.x;
-  if (uFlip.y == 1) q.y = uSource.y - 1 - q.y;
-  color = texelFetch(uImage, q, 0);
 }`;
 const blurShader = `#version 300 es
 precision highp float;
@@ -50,57 +31,6 @@ void main() {
   }
   if (uHorizontal == 0 && sum.a > 0.0) sum.rgb /= sum.a;
   color = sum;
-}`;
-const colorShader = `#version 300 es
-precision highp float;
-precision highp int;
-uniform sampler2D uImage;
-uniform ivec2 uSize;
-uniform int uMirror;
-uniform vec3 uAdjust;
-uniform float uHue;
-uniform ivec3 uEffects;
-uniform float uNoise;
-uniform uint uSeed;
-uniform ivec2 uNoiseSize;
-out vec4 color;
-vec3 rotateHue(vec3 c, float angle) {
-  float high = max(c.r, max(c.g, c.b)), low = min(c.r, min(c.g, c.b));
-  float d = high - low, l = (high + low) * 0.5;
-  if (d == 0.0) return c;
-  float s = d / (1.0 - abs(2.0 * l - 1.0));
-  float h = high == c.r ? (c.g - c.b) / d : high == c.g ? (c.b - c.r) / d + 2.0 : (c.r - c.g) / d + 4.0;
-  h = fract(h / 6.0 + angle / 360.0);
-  float chroma = (1.0 - abs(2.0 * l - 1.0)) * s, v = h * 6.0;
-  float x = chroma * (1.0 - abs(mod(v, 2.0) - 1.0));
-  vec3 rgb = v < 1.0 ? vec3(chroma,x,0) : v < 2.0 ? vec3(x,chroma,0) : v < 3.0 ? vec3(0,chroma,x) : v < 4.0 ? vec3(0,x,chroma) : v < 5.0 ? vec3(x,0,chroma) : vec3(chroma,0,x);
-  return rgb + l - chroma * 0.5;
-}
-float noise(uint p) {
-  uint v = p ^ uSeed;
-  v = (v ^ (v >> 16)) * 0x7feb352du;
-  v = (v ^ (v >> 15)) * 0x846ca68bu;
-  v ^= v >> 16;
-  return float(v & 65535u) / 65535.0 - 0.5;
-}
-void main() {
-  ivec2 p = ivec2(int(gl_FragCoord.x), uSize.y - 1 - int(gl_FragCoord.y));
-  if ((uMirror == 1 || uMirror == 5) && p.x >= (uSize.x + 1) / 2) p.x = uSize.x - 1 - p.x;
-  if (uMirror == 2 && p.x < uSize.x / 2) p.x = uSize.x - 1 - p.x;
-  if ((uMirror == 3 || uMirror == 5) && p.y >= (uSize.y + 1) / 2) p.y = uSize.y - 1 - p.y;
-  if (uMirror == 4 && p.y < uSize.y / 2) p.y = uSize.y - 1 - p.y;
-  vec4 inputColor = texelFetch(uImage, p, 0);
-  vec3 c = clamp(inputColor.rgb * uAdjust.x, 0.0, 1.0);
-  c = clamp(c * uAdjust.y + (128.0 / 255.0) * (1.0 - uAdjust.y), 0.0, 1.0);
-  float g = dot(c, vec3(0.299, 0.587, 0.114));
-  c = clamp(vec3(g) + uAdjust.z * (c - g), 0.0, 1.0);
-  if (uHue != 0.0) c = rotateHue(c, uHue);
-  if (uEffects.x == 1) c = vec3(dot(c, vec3(0.299, 0.587, 0.114)));
-  if (uEffects.y == 1) c = 1.0 - c;
-  if (uEffects.z == 1) c = min(vec3(dot(c,vec3(0.393,0.769,0.189)),dot(c,vec3(0.349,0.686,0.168)),dot(c,vec3(0.272,0.534,0.131))), vec3(1));
-  ivec2 noisePoint = ivec2(floor((vec2(p) + 0.5) * vec2(uNoiseSize) / vec2(uSize)));
-  c = clamp(c + noise(uint(noisePoint.y * uNoiseSize.x + noisePoint.x)) * uNoise * 0.01, 0.0, 1.0);
-  color = vec4(c, inputColor.a);
 }`;
 
 export class GpuRenderer {
@@ -172,11 +102,24 @@ export class GpuRenderer {
     gl.uniform2i(gl.getUniformLocation(program, 'uSize'), this.width, this.height);
   }
 
+  private blurTexture(input: WebGLTexture, horizontal: WebGLTexture, vertical: WebGLTexture, sigma: number) {
+    const gl = this.gl, program = this.programs[1], kernel = gaussianKernel(sigma), weights = new Float32Array(121);
+    weights.set(kernel.weights, 60 - kernel.radius);
+    for (let direction = 1; direction >= 0; direction--) {
+      this.begin(program, direction ? input : horizontal, direction ? horizontal : vertical);
+      gl.uniform1i(gl.getUniformLocation(program, 'uRadius'), kernel.radius);
+      gl.uniform1fv(gl.getUniformLocation(program, 'uWeights[0]'), weights);
+      gl.uniform1i(gl.getUniformLocation(program, 'uHorizontal'), direction);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+    return vertical;
+  }
+
   private draw(source: Raster, t: Transformations, seed: number, key: string, readback: boolean, noiseSize?: { width:number; height:number }) {
     const gl = this.gl;
     this.releaseTransient();
     if (gl.isContextLost()) throw new Error('The WebGL context was lost');
-    if (t.blur > 0 && !this.floatBuffers) throw new Error('This GPU does not support floating-point blur buffers');
+    if ((t.blur > 0 || t.bloom > 0) && !this.floatBuffers) throw new Error('This GPU does not support floating-point blur buffers');
     const size = dimensions(source.width, source.height, t.rotation);
     if (Math.max(source.width, source.height, size.width, size.height) > gl.getParameter(gl.MAX_TEXTURE_SIZE)) throw new Error('Image exceeds GPU texture size');
     if (size.width !== this.width || size.height !== this.height) {
@@ -198,30 +141,41 @@ export class GpuRenderer {
     gl.uniform1i(gl.getUniformLocation(geometryProgram, 'uRotation'), t.rotation);
     gl.uniform2i(gl.getUniformLocation(geometryProgram, 'uFlip'), Number(t.flipHorizontal), Number(t.flipVertical));
     gl.uniform1i(gl.getUniformLocation(geometryProgram, 'uPixelate'), Math.max(1, Math.round(t.pixelate)));
+    gl.uniform4f(gl.getUniformLocation(geometryProgram, 'uWarp'), t.swirl * Math.PI / 180, t.bulge / 125, t.ripple / 400, t.radialSymmetry);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     let filtered = this.targets[0];
     if (t.blur > 0) {
-      const program = this.programs[1], kernel = gaussianKernel(t.blur), weights = new Float32Array(121);
-      weights.set(kernel.weights, 60 - kernel.radius);
-      for (let horizontal = 1; horizontal >= 0; horizontal--) {
-        this.begin(program, horizontal ? this.targets[0] : this.targets[1], horizontal ? this.targets[1] : this.targets[2]);
-        gl.uniform1i(gl.getUniformLocation(program, 'uRadius'), kernel.radius);
-        gl.uniform1fv(gl.getUniformLocation(program, 'uWeights[0]'), weights);
-        gl.uniform1i(gl.getUniformLocation(program, 'uHorizontal'), horizontal);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-      }
-      filtered = this.targets[2];
+      filtered = this.blurTexture(filtered, this.targets[1], this.targets[2], t.blur);
+    }
+    let glow: WebGLTexture | undefined;
+    if (t.bloom > 0) {
+      this.targets[4] ??= this.texture(this.width, this.height, undefined, true);
+      this.targets[5] ??= this.texture(this.width, this.height);
+      glow = this.blurTexture(filtered, this.targets[4], this.targets[5], Math.max(0.5, 4 * this.width / (noiseSize?.width ?? this.width)));
     }
     const program = this.programs[2];
     this.begin(program, filtered, readback ? this.targets[3] : null);
     const modes = ['none', 'left', 'right', 'top', 'bottom', 'center'];
     gl.uniform1i(gl.getUniformLocation(program, 'uMirror'), modes.indexOf(t.mirrorMode));
     gl.uniform3f(gl.getUniformLocation(program, 'uAdjust'), t.brightness / 100, t.contrast / 100, t.saturation / 100);
+    gl.uniform4f(gl.getUniformLocation(program, 'uTone'), t.exposure, t.temperature / 100, t.tint / 100, t.vibrance / 100);
     gl.uniform1f(gl.getUniformLocation(program, 'uHue'), t.hueRotate);
     gl.uniform3i(gl.getUniformLocation(program, 'uEffects'), Number(t.grayscale), Number(t.invert), Number(t.sepia));
     gl.uniform1f(gl.getUniformLocation(program, 'uNoise'), t.noise);
     gl.uniform1ui(gl.getUniformLocation(program, 'uSeed'), seed >>> 0);
     gl.uniform2i(gl.getUniformLocation(program, 'uNoiseSize'), noiseSize?.width ?? this.width, noiseSize?.height ?? this.height);
+    gl.uniform1i(gl.getUniformLocation(program, 'uGrade'), Math.max(0, colorGrades.indexOf(t.colorGrade)));
+    gl.uniform1f(gl.getUniformLocation(program, 'uGradeStrength'), t.gradeStrength / 100);
+    const dark = hexColor(t.duotoneDark), light = hexColor(t.duotoneLight);
+    gl.uniform3f(gl.getUniformLocation(program, 'uDuoDark'), dark[0] / 255, dark[1] / 255, dark[2] / 255);
+    gl.uniform3f(gl.getUniformLocation(program, 'uDuoLight'), light[0] / 255, light[1] / 255, light[2] / 255);
+    gl.uniform1i(gl.getUniformLocation(program, 'uArt'), Math.max(0, gpuArtStyles.indexOf(t.artStyle)));
+    gl.uniform1f(gl.getUniformLocation(program, 'uArtStrength'), t.artStrength / 100);
+    gl.uniform4f(gl.getUniformLocation(program, 'uTexture'), t.vignette / 100, t.rgbSplit, t.halftone, t.scanlines / 100);
+    gl.uniform1f(gl.getUniformLocation(program, 'uGlitch'), t.glitch);
+    gl.uniform1f(gl.getUniformLocation(program, 'uBloomStrength'), t.bloom / 100);
+    gl.uniform1i(gl.getUniformLocation(program, 'uBloom'), glow ? 1 : 0);
+    if (glow) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, glow); }
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     this.releaseTransient();
     if (gl.getError() !== gl.NO_ERROR) throw new Error('GPU rendering failed');

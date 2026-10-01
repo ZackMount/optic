@@ -25,7 +25,7 @@ export default function Home() {
   useClipboardPaste(selectImage, setImportError);
   useEffect(() => () => { if (sourceImage) URL.revokeObjectURL(sourceImage.url); }, [sourceImage]);
   
-  const isGif = info?.animated || sourceImage?.format === 'gif';
+  const isGif = info?.animated ?? sourceImage?.format === 'gif';
 
   const handleReset = () => {
     setSourceImage(null);

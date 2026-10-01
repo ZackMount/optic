@@ -22,22 +22,40 @@ Image processing tool for transform, flip, mirror, and apply effects to images. 
 - **Rotate** - 90°, 180°, 270° rotations
 - **Flip** - Horizontal and vertical flipping
 - **Mirror** - Left/right, top/bottom, and kaleidoscope (center) mirroring
+- **Distort** - Swirl, bulge/pinch, radial ripple and ImageMagick wave distortion
+- **Radial Symmetry** - Kaleidoscopes with up to 16 reflected sectors
 
 ### Color Effects
 - **Grayscale** - Convert to black and white
 - **Invert** - Invert colors
 - **Sepia** - Apply vintage sepia tone
+- **Color tools** - Moonlight, solarization, black and white threshold, and palette reduction
+- **Color grades** - Custom duotone, cyanotype, thermal, Game Boy, vintage film and cross process
 
 ### Adjustments
 - **Brightness** - Adjust image brightness (0-200%)
 - **Contrast** - Adjust image contrast (0-200%)
 - **Saturation** - Adjust color saturation (0-200%)
 - **Hue** - Rotate color hue (0-360°)
+- **Automatic corrections** - ImageMagick auto levels, auto gamma and normalization
+- **Tone controls** - Exposure, gamma, vibrance, temperature, tint, local contrast and S-curve contrast
 
 ### Special Effects
 - **Blur** - Apply blur effect (0-20px)
 - **Pixelate** - Pixelation effect (1-50px)
 - **Noise** - Add noise to image (0-100%)
+- **Detail** - ImageMagick sharpening, bilateral denoising and directional motion blur
+
+### Artistic Effects
+- ImageMagick oil painting, charcoal, emboss, adaptive ink drawing and Canny line art
+- GPU neon outlines, blueprint drawings and comic shading
+- Adjustable strength for mixing the artwork with the image
+
+### Light and Texture
+- Bloom, vignette, RGB channel splitting, halftone dots, scanlines and glitch bands
+- Eight one-click looks: Neon sticker, Retro console, Comic print, Blueprint, Cyanotype, Vintage film, VHS tape and Dream glow
+- Looks preserve rotation, flips, symmetry and animation settings
+- Sidebar search finds effects and looks; double-click a slider to reset it
 
 ### GIF Support
 - Full GIF frame processing
@@ -45,6 +63,8 @@ Image processing tool for transform, flip, mirror, and apply effects to images. 
 - Preserves animation and transparency
 - Keeps local frame palettes, delays, disposal rules, and finite loops
 - Exact indexed rotation and flipping without color quantization
+- Reverse, ping-pong and 25–800% playback speed, with an editable percentage field
+- Speed changes keep the indexed GIF path; reordered frames are composed before encoding
 
 ### Processing Engine
 - ImageMagick / WebAssembly runs locally in a dedicated Web Worker
@@ -56,6 +76,10 @@ Image processing tool for transform, flip, mirror, and apply effects to images. 
 - Adaptive GIF preview buffers keep the original logical display size
 - Unedited files are exported byte for byte; static edits default to lossless PNG
 - JPEG exports have an explicit background color; WebP supports lossless export
+- ImageMagick effects run before GPU adjustments and creative shaders in both preview and export
+- Native effect pixels are cached separately so changing a GPU slider can reuse expensive native work
+- Native previews use an adaptive pixel budget while retaining their logical display size; exports use the full image resolution
+- Color and artistic operations retain the source alpha mask; wave and geometric distortions move alpha with the pixels
 
 ## Getting Started
 

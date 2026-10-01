@@ -1,434 +1,175 @@
 "use client";
 
-import { useState } from "react";
-import { 
-  RotateCw, 
-  FlipHorizontal, 
-  FlipVertical, 
-  Moon, 
-  Contrast, 
-  Columns2,
-  Rows2,
-  Grid2x2,
-  Shuffle,
-  RotateCcw,
-  ChevronsLeft,
-  ChevronsRight,
-  Sun,
-  Droplets,
-  Palette,
-  Grid3x3,
-  Sparkles,
-  SunDim,
-  CircleDot,
-  ArrowRightLeft
-} from "lucide-react";
-import { cn } from "@/lib/utils";
-import { type Transformations, defaultTransformations } from "@/hooks/use-image-processor";
-import { motion } from "framer-motion";
+import { useState, type ElementType } from 'react';
+import { motion } from 'framer-motion';
+import { RotateCw, RotateCcw, FlipHorizontal, FlipVertical, Columns2, Rows2, Grid2x2, ChevronsLeft, ChevronsRight, Search, X, GalleryVerticalEnd } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { Select } from '@/components/ui/select';
+import { defaultTransformations, type Transformations } from '@/lib/image-engine/types';
+import { effectGroups, effectPresets, presetTransformations, symmetryControls, transformControls, type EffectControl } from './effect-catalog';
 
 interface ToolbarProps {
   transformations: Transformations;
-  setTransformations: (t: Transformations | ((prev: Transformations) => Transformations)) => void;
+  setTransformations: (value: Transformations | ((previous: Transformations) => Transformations)) => void;
   isGif?: boolean;
 }
 
-const COLLAPSED_WIDTH = 60;
-const EXPANDED_WIDTH = 240;
-
-export function Toolbar({ transformations, setTransformations, isGif }: ToolbarProps) {
+export function Toolbar({ transformations: t, setTransformations, isGif }: ToolbarProps) {
   const [expanded, setExpanded] = useState(true);
-  
-  const toggle = (key: keyof Transformations) => {
-    setTransformations(prev => ({ ...prev, [key]: !prev[key as keyof Transformations] }));
-  };
+  const [query, setQuery] = useState('');
+  const search = query.trim().toLowerCase();
+  const matches = (group: string, label: string, keywords = '') => !search || (group + ' ' + label + ' ' + keywords).toLowerCase().includes(search);
+  const change = (key: keyof Transformations, value: Transformations[keyof Transformations]) => setTransformations(previous => ({ ...previous, [key]: value }));
+  const mirror = (value: Transformations['mirrorMode']) => change('mirrorMode', t.mirrorMode === value ? 'none' : value);
+  const controls = (group: string, items: EffectControl[]) => items.filter(control => (!control.when || control.when(t)) && matches(group, control.label, control.keywords)).map(control =>
+    <EffectField key={control.key} control={control} transformations={t} expanded={expanded} onChange={change} onExpand={() => setExpanded(true)} />);
+  const transformItems = controls('Transform', transformControls);
+  const symmetryItems = controls('Symmetry', symmetryControls);
+  const groups = effectGroups.filter(group => !group.gifOnly || isGif).map(group => ({ ...group, fields: controls(group.title, group.controls) })).filter(group => group.fields.length);
+  const presets = effectPresets.filter(preset => matches('Looks', preset.name, preset.description));
+  const transformActions = matches('Transform', 'Rotate Flip H Flip V');
+  const symmetryActions = matches('Symmetry', 'Mirror LR Mirror TB Kaleido');
+  const empty = !transformActions && !symmetryActions && !transformItems.length && !symmetryItems.length && !groups.length && !presets.length;
 
-  const setMirror = (mode: Transformations['mirrorMode']) => {
-    setTransformations(prev => ({ ...prev, mirrorMode: prev.mirrorMode === mode ? 'none' : mode }));
-  };
-
-  const rotate = () => {
-    setTransformations(prev => ({ 
-      ...prev, 
-      rotation: ((prev.rotation + 90) % 360) as 0 | 90 | 180 | 270 
-    }));
-  };
-
-  const reset = () => {
-    setTransformations(defaultTransformations);
-  };
-
-  const setSlider = (key: keyof Transformations, value: number) => {
-    setTransformations(prev => ({ ...prev, [key]: value }));
-  };
-
-  return (
-    <motion.div 
-      initial={false}
-      animate={{ width: expanded ? EXPANDED_WIDTH : COLLAPSED_WIDTH }}
-      transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
-      className="flex flex-col h-full overflow-hidden"
-    >
-      <button
-        onClick={() => setExpanded(!expanded)}
-        aria-label={expanded ? 'Collapse sidebar' : 'Expand sidebar'}
-        aria-expanded={expanded}
-        className="h-11 flex items-center justify-center text-muted hover:text-foreground transition-colors shrink-0"
-      >
-        {expanded ? <ChevronsLeft size={16} /> : <ChevronsRight size={16} />}
-      </button>
-      
-      <div className="flex-1 flex flex-col gap-0.5 px-1.5 overflow-y-auto overflow-x-hidden">
-        <ToolGroup title="Transform" expanded={expanded}>
-          <ToolButton 
-            icon={RotateCw} 
-            label="Rotate" 
-            onClick={rotate} 
-            expanded={expanded}
-            badge={transformations.rotation > 0 ? `${transformations.rotation}°` : undefined}
-          />
-          <ToolButton 
-            icon={FlipHorizontal} 
-            label="Flip H" 
-            active={transformations.flipHorizontal}
-            onClick={() => toggle('flipHorizontal')} 
-            expanded={expanded}
-          />
-          <ToolButton 
-            icon={FlipVertical} 
-            label="Flip V" 
-            active={transformations.flipVertical}
-            onClick={() => toggle('flipVertical')} 
-            expanded={expanded}
-          />
-        </ToolGroup>
-
-        <ToolGroup title="Symmetry" expanded={expanded}>
-          <ToolButton 
-            icon={Columns2}
-            label="Mirror LR"
-            active={transformations.mirrorMode === 'left'}
-            onClick={() => setMirror('left')}
-            expanded={expanded}
-          />
-          <ToolButton 
-            icon={Rows2}
-            label="Mirror TB"
-            active={transformations.mirrorMode === 'top'}
-            onClick={() => setMirror('top')}
-            expanded={expanded}
-          />
-          <ToolButton 
-            icon={Grid2x2}
-            label="Kaleido"
-            active={transformations.mirrorMode === 'center'}
-            onClick={() => setMirror('center')}
-            expanded={expanded}
-          />
-        </ToolGroup>
-
-        <ToolGroup title="Colors" expanded={expanded}>
-          <ToolButton 
-            icon={Moon} 
-            label="Grayscale" 
-            active={transformations.grayscale}
-            onClick={() => toggle('grayscale')} 
-            expanded={expanded}
-          />
-          <ToolButton 
-            icon={ArrowRightLeft} 
-            label="Invert" 
-            active={transformations.invert}
-            onClick={() => toggle('invert')} 
-            expanded={expanded}
-          />
-          <ToolButton 
-            icon={SunDim} 
-            label="Sepia" 
-            active={transformations.sepia}
-            onClick={() => toggle('sepia')} 
-            expanded={expanded}
-          />
-        </ToolGroup>
-
-        <ToolGroup title="Adjust" expanded={expanded}>
-          <SliderControl
-            icon={Sun}
-            label="Brightness"
-            value={transformations.brightness}
-            onChange={(v) => setSlider('brightness', v)}
-            min={0}
-            max={200}
-            defaultValue={100}
-            expanded={expanded}
-          />
-          <SliderControl
-            icon={Contrast}
-            label="Contrast"
-            value={transformations.contrast}
-            onChange={(v) => setSlider('contrast', v)}
-            min={0}
-            max={200}
-            defaultValue={100}
-            expanded={expanded}
-          />
-          <SliderControl
-            icon={CircleDot}
-            label="Saturation"
-            value={transformations.saturation}
-            onChange={(v) => setSlider('saturation', v)}
-            min={0}
-            max={200}
-            defaultValue={100}
-            expanded={expanded}
-          />
-          <SliderControl
-            icon={Palette}
-            label="Hue"
-            value={transformations.hueRotate}
-            onChange={(v) => setSlider('hueRotate', v)}
-            min={0}
-            max={360}
-            defaultValue={0}
-            expanded={expanded}
-          />
-        </ToolGroup>
-
-        <ToolGroup title="Effects" expanded={expanded}>
-          <SliderControl
-            icon={Droplets}
-            label="Blur"
-            value={transformations.blur}
-            onChange={(v) => setSlider('blur', v)}
-            min={0}
-            max={20}
-            defaultValue={0}
-            expanded={expanded}
-          />
-          <SliderControl
-            icon={Grid3x3}
-            label="Pixelate"
-            value={transformations.pixelate}
-            onChange={(v) => setSlider('pixelate', v)}
-            min={1}
-            max={50}
-            defaultValue={1}
-            expanded={expanded}
-          />
-          <SliderControl
-            icon={Sparkles}
-            label="Noise"
-            value={transformations.noise}
-            onChange={(v) => setSlider('noise', v)}
-            min={0}
-            max={100}
-            defaultValue={0}
-            expanded={expanded}
-          />
-        </ToolGroup>
-        
-        {isGif && (
-          <ToolGroup title="GIF" expanded={expanded}>
-            <ToolButton 
-              icon={Shuffle} 
-              label="Shuffle" 
-              active={transformations.shuffleFrames}
-              onClick={() => toggle('shuffleFrames')} 
-              expanded={expanded}
-            />
-          </ToolGroup>
-        )}
-      </div>
-
-      <div className="py-2 px-1.5 border-t border-border shrink-0 flex justify-center">
-        <button
-          onClick={reset}
-          className={cn(
-            "group relative flex items-center justify-center gap-2 rounded-lg text-muted hover:text-foreground hover:bg-secondary transition-all",
-            expanded ? "px-3 py-2 w-full" : "w-10 h-10"
-          )}
-          title={!expanded ? "Reset" : undefined}
-        >
-          <RotateCcw size={16} strokeWidth={1.8} />
-          {expanded && <span className="text-sm">Reset</span>}
-          {!expanded && (
-            <div className="absolute left-full ml-2 px-2 py-1 bg-foreground text-background text-xs rounded opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50">
-              Reset
-            </div>
-          )}
-        </button>
-      </div>
-    </motion.div>
-  );
-}
-
-function ToolGroup({ title, children, expanded }: { title: string, children: React.ReactNode, expanded: boolean }) {
-  return (
-    <div className="flex flex-col gap-0.5 py-1.5">
-      <div 
-        className={cn(
-          "h-5 flex items-center overflow-hidden transition-opacity duration-200",
-          expanded ? "opacity-100" : "opacity-0"
-        )}
-      >
-        <span className="text-[10px] font-medium text-muted uppercase tracking-wider px-2 whitespace-nowrap">
-          {title}
-        </span>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function ToolButton({ 
-  icon: Icon, 
-  label, 
-  active, 
-  onClick,
-  expanded,
-  badge,
-  variant = "default"
-}: { 
-  icon: React.ElementType, 
-  label: string, 
-  active?: boolean, 
-  onClick: () => void,
-  expanded: boolean,
-  badge?: string,
-  variant?: "default" | "muted"
-}) {
-  return (
-    <button
-      onClick={onClick}
-      aria-label={label}
-      className={cn(
-        "group relative h-9 flex items-center rounded-lg transition-colors duration-150",
-        active 
-          ? "bg-primary text-primary-foreground" 
-          : variant === "muted"
-            ? "text-muted hover:text-foreground hover:bg-secondary"
-            : "text-foreground/70 hover:text-foreground hover:bg-secondary"
-      )}
-      title={!expanded ? label : undefined}
-    >
-      <div className={cn(
-        "flex items-center justify-center shrink-0",
-        expanded ? "w-[50px]" : "w-full"
-      )}>
-        <Icon size={18} strokeWidth={1.8} />
-      </div>
-      
-      <div 
-        className={cn(
-          "flex-1 flex items-center overflow-hidden transition-all duration-200",
-          expanded ? "opacity-100" : "opacity-0 w-0"
-        )}
-      >
-        <span className="text-sm font-medium whitespace-nowrap pr-3">
-          {label}
-        </span>
-      </div>
-
-      {badge && (
-        <span className={cn(
-          "absolute text-[10px] px-1 rounded transition-all duration-200",
-          active ? "bg-white/20" : "bg-secondary",
-          expanded 
-            ? "right-2 top-1/2 -translate-y-1/2" 
-            : "top-0 right-0 text-[8px]"
-        )}>
-          {badge}
-        </span>
-      )}
-
-      {!expanded && (
-        <div className="absolute left-full ml-2 px-2 py-1 bg-foreground text-background text-xs rounded opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 transition-opacity duration-150">
-          {label}
-        </div>
-      )}
+  return <motion.div initial={false} animate={{ width: expanded ? 240 : 60 }}
+    transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }} role="complementary" aria-label="Image effects"
+    className="flex h-full flex-col overflow-hidden">
+    <button type="button" onClick={() => setExpanded(!expanded)} aria-label={expanded ? 'Collapse sidebar' : 'Expand sidebar'}
+      aria-expanded={expanded} className="flex h-11 shrink-0 items-center justify-center text-muted transition-colors hover:text-foreground">
+      {expanded ? <ChevronsLeft size={16} /> : <ChevronsRight size={16} />}
     </button>
-  );
+    <div className="shrink-0 px-2 pb-2">
+      {expanded ? <div className="flex h-8 items-center gap-2 rounded-lg border border-border bg-secondary/40 px-2">
+        <Search size={13} className="shrink-0 text-muted" />
+        <input type="search" aria-label="Search effects" placeholder="Search effects" value={query} onChange={event => setQuery(event.target.value)}
+          className="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted" />
+        {query && <button type="button" onClick={() => setQuery('')} aria-label="Clear effect search" className="text-muted hover:text-foreground"><X size={12} /></button>}
+      </div> : <button type="button" onClick={() => setExpanded(true)} aria-label="Search effects" title="Search effects"
+        className={cn('flex h-8 w-full items-center justify-center rounded-lg hover:bg-secondary', search ? 'text-primary' : 'text-muted')}><Search size={16} /></button>}
+    </div>
+    <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overflow-x-hidden px-1.5">
+      {(transformActions || transformItems.length > 0) && <ToolGroup title="Transform" expanded={expanded}>
+        {transformActions && <>
+          <ToolButton icon={RotateCw} label="Rotate" onClick={() => change('rotation', ((t.rotation + 90) % 360) as Transformations['rotation'])}
+            expanded={expanded} badge={t.rotation ? t.rotation + '°' : undefined} />
+          <ToolButton icon={FlipHorizontal} label="Flip H" active={t.flipHorizontal} onClick={() => change('flipHorizontal', !t.flipHorizontal)} expanded={expanded} />
+          <ToolButton icon={FlipVertical} label="Flip V" active={t.flipVertical} onClick={() => change('flipVertical', !t.flipVertical)} expanded={expanded} />
+        </>}
+        {transformItems}
+      </ToolGroup>}
+      {(symmetryActions || symmetryItems.length > 0) && <ToolGroup title="Symmetry" expanded={expanded}>
+        {symmetryActions && <>
+          <ToolButton icon={Columns2} label="Mirror LR" active={t.mirrorMode === 'left'} onClick={() => mirror('left')} expanded={expanded} />
+          <ToolButton icon={Rows2} label="Mirror TB" active={t.mirrorMode === 'top'} onClick={() => mirror('top')} expanded={expanded} />
+          <ToolButton icon={Grid2x2} label="Kaleido" active={t.mirrorMode === 'center'} onClick={() => mirror('center')} expanded={expanded} />
+        </>}
+        {symmetryItems}
+      </ToolGroup>}
+      {groups.map(group => <ToolGroup key={group.title} title={group.title} expanded={expanded}>{group.fields}</ToolGroup>)}
+      {presets.length > 0 && <ToolGroup title="Looks" expanded={expanded}>
+        {expanded ? <div className="grid grid-cols-2 gap-1.5 px-1 py-1">
+          {presets.map(preset => <button type="button" key={preset.name} title={preset.description}
+            onClick={() => setTransformations(previous => presetTransformations(previous, preset.values))}
+            className="min-h-9 rounded-lg border border-border bg-secondary/30 px-2 py-2 text-left text-xs text-foreground/80 transition-colors hover:border-border-strong hover:bg-secondary hover:text-foreground">
+            {preset.name}
+          </button>)}
+        </div> : <ToolButton icon={GalleryVerticalEnd} label="Looks" expanded={false} onClick={() => setExpanded(true)} />}
+      </ToolGroup>}
+      {empty && <p className="px-2 py-4 text-xs text-muted">No matching effects.</p>}
+    </div>
+    <div className="flex shrink-0 justify-center border-t border-border px-1.5 py-2">
+      <button type="button" onClick={() => setTransformations(defaultTransformations)} title="Reset all effects" aria-label="Reset"
+        className={cn('flex items-center justify-center gap-2 rounded-lg text-muted transition-colors hover:bg-secondary hover:text-foreground', expanded ? 'w-full px-3 py-2' : 'h-10 w-10')}>
+        <RotateCcw size={16} strokeWidth={1.8} />{expanded && <span className="text-sm">Reset</span>}
+      </button>
+    </div>
+  </motion.div>;
 }
 
-function SliderControl({
-  icon: Icon,
-  label,
-  value,
-  onChange,
-  min,
-  max,
-  defaultValue,
-  expanded
-}: {
-  icon: React.ElementType,
-  label: string,
-  value: number,
-  onChange: (value: number) => void,
-  min: number,
-  max: number,
-  defaultValue: number,
-  expanded: boolean
+function EffectField({ control, transformations: t, expanded, onChange, onExpand }: {
+  control: EffectControl; transformations: Transformations; expanded: boolean; onExpand: () => void;
+  onChange: (key: keyof Transformations, value: Transformations[keyof Transformations]) => void;
 }) {
-  const isModified = value !== defaultValue;
-  
-  const handleDoubleClick = () => {
-    onChange(defaultValue);
-  };
-
-  return (
-    <div
-      className={cn(
-        "group relative rounded-lg transition-colors duration-150",
-        expanded ? "min-h-[64px] py-2" : "h-9",
-        "flex items-center",
-        isModified 
-          ? "bg-primary/10 text-primary" 
-          : "text-foreground/70 hover:text-foreground hover:bg-secondary"
-      )}
-      title={!expanded ? `${label}: ${value}` : undefined}
-    >
-      <div className={cn(
-        "flex items-center justify-center shrink-0",
-        expanded ? "w-[50px]" : "w-full"
-      )}>
-        <Icon size={18} strokeWidth={1.8} />
-      </div>
-      
-      <div 
-        className={cn(
-          "flex-1 flex flex-col justify-center overflow-visible transition-all duration-200 pr-2",
-          expanded ? "opacity-100" : "opacity-0 w-0"
-        )}
-      >
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="text-xs font-medium whitespace-nowrap">{label}</span>
-          <span className="text-[10px] text-muted">{value}</span>
-        </div>
-        <div className="relative h-6 flex items-center py-1.5">
-          <input
-            type="range"
-            aria-label={label}
-            min={min}
-            max={max}
-            value={value}
-            onChange={(e) => onChange(Number(e.target.value))}
-            onDoubleClick={handleDoubleClick}
-            className="w-full h-1 bg-border rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-primary [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-sm"
-          />
-        </div>
-      </div>
-
-      {!expanded && isModified && (
-        <span className="absolute top-0 right-0 text-[8px] px-1 rounded bg-primary/20">
-          {value}
-        </span>
-      )}
-
-      {!expanded && (
-        <div className="absolute left-full ml-2 px-2 py-1 bg-foreground text-background text-xs rounded opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 transition-opacity duration-150">
-          {label}: {value}
-        </div>
-      )}
+  const Icon = control.kind === 'select' ? control.options.find(option => option.value === t[control.key])?.icon || control.icon : control.icon;
+  if (control.kind === 'toggle') return <ToolButton icon={Icon} label={control.label} active={t[control.key]}
+    onClick={() => onChange(control.key, !t[control.key])} expanded={expanded} />;
+  if (control.kind === 'slider') return <SliderControl icon={Icon} label={control.label} value={t[control.key]}
+    onChange={value => onChange(control.key, value)} min={control.min} max={control.max} step={control.step}
+    defaultValue={defaultTransformations[control.key]} format={control.format} expanded={expanded} onExpand={onExpand}
+    editable={control.editable} unit={control.unit} />;
+  if (!expanded) return <ToolButton icon={Icon} label={control.label} active={t[control.key] !== defaultTransformations[control.key]} onClick={onExpand} expanded={false} />;
+  if (control.kind === 'select') return <div className={cn('flex min-h-16 items-center rounded-lg py-2', t[control.key] !== defaultTransformations[control.key] && 'bg-primary/10')}>
+    <div className="flex w-[50px] shrink-0 items-center justify-center text-foreground/70"><Icon size={18} strokeWidth={1.8} /></div>
+    <div className="flex min-w-0 flex-1 flex-col gap-1.5 pr-2">
+      <span className="text-xs font-medium text-foreground/70">{control.label}</span>
+      <Select label={control.label} value={t[control.key]} options={control.options}
+        onValueChange={value => onChange(control.key, value as Transformations[typeof control.key])} className="w-full" />
     </div>
-  );
+  </div>;
+  return <label className="flex h-11 items-center gap-0 rounded-lg text-foreground/70 hover:bg-secondary">
+    <span className="flex w-[50px] shrink-0 justify-center"><Icon size={18} strokeWidth={1.8} /></span>
+    <span className="flex-1 text-xs font-medium">{control.label}</span>
+    <input type="color" aria-label={control.label} value={t[control.key]} onChange={event => onChange(control.key, event.target.value)}
+      className="mr-2 h-7 w-9 cursor-pointer rounded border-0 bg-transparent p-0" />
+  </label>;
+}
+
+function ToolGroup({ title, children, expanded }: { title: string; children: React.ReactNode; expanded: boolean }) {
+  return <div className="flex flex-col gap-0.5 py-1.5">
+    <div className={cn('flex h-5 items-center overflow-hidden transition-opacity duration-200', expanded ? 'opacity-100' : 'opacity-0')}>
+      <span className="whitespace-nowrap px-2 text-[10px] font-medium uppercase tracking-wider text-muted">{title}</span>
+    </div>{children}
+  </div>;
+}
+
+function ToolButton({ icon: Icon, label, active, onClick, expanded, badge }: {
+  icon: ElementType; label: string; active?: boolean; onClick: () => void; expanded: boolean; badge?: string;
+}) {
+  return <button type="button" onClick={onClick} aria-label={label} aria-pressed={active}
+    title={!expanded ? label : undefined}
+    className={cn('group relative flex h-9 items-center rounded-lg transition-colors duration-150', active ? 'bg-primary text-primary-foreground' : 'text-foreground/70 hover:bg-secondary hover:text-foreground')}>
+    <span className={cn('flex shrink-0 items-center justify-center', expanded ? 'w-[50px]' : 'w-full')}><Icon size={18} strokeWidth={1.8} /></span>
+    {expanded && <span className="min-w-0 flex-1 truncate pr-3 text-left text-sm font-medium">{label}</span>}
+    {badge && <span className={cn('absolute rounded bg-secondary px-1 text-[10px]', expanded ? 'right-2 top-1/2 -translate-y-1/2' : 'right-0 top-0 text-[8px]')}>{badge}</span>}
+  </button>;
+}
+
+function SliderControl({ icon: Icon, label, value, onChange, min, max, step = 1, defaultValue, format, expanded, onExpand, editable, unit }: {
+  icon: ElementType; label: string; value: number; onChange: (value: number) => void;
+  min: number; max: number; step?: number; defaultValue: number; format?: (value: number) => string; expanded: boolean; onExpand: () => void;
+  editable?: boolean; unit?: string;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const modified = value !== defaultValue;
+  const display = format ? format(value) : String(Math.round(value * 100) / 100);
+  const commit = (raw: string) => {
+    const parsed = raw.trim() ? Number(raw) : value;
+    const next = Number.isFinite(parsed) ? Math.min(max, Math.max(min, Math.round(parsed))) : value;
+    setDraft(null);
+    if (next !== value) onChange(next);
+  };
+  if (!expanded) return <ToolButton icon={Icon} label={label + ': ' + display} active={modified} onClick={onExpand} expanded={false} badge={modified ? display : undefined} />;
+  return <div title={label} className={cn('flex min-h-16 items-center rounded-lg py-2 transition-colors', modified ? 'bg-primary/10 text-primary' : 'text-foreground/70 hover:bg-secondary hover:text-foreground')}>
+    <span className="flex w-[50px] shrink-0 items-center justify-center"><Icon size={18} strokeWidth={1.8} /></span>
+    <div className="flex min-w-0 flex-1 flex-col justify-center pr-2">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <span className="truncate text-xs font-medium">{label}</span>
+        {editable ? <span className="flex shrink-0 items-center gap-1 text-[10px] text-muted">
+          <input type="number" aria-label={label + ' value'} min={min} max={max} step={1} value={draft ?? String(value)}
+            onFocus={() => setDraft(String(value))} onChange={event => setDraft(event.target.value)}
+            onBlur={event => commit(event.target.value)} onKeyDown={event => {
+              if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); }
+              if (event.key === 'Escape') { event.preventDefault(); event.currentTarget.value = String(value); event.currentTarget.blur(); }
+            }}
+            className="h-6 w-14 rounded-md border border-border bg-secondary/40 px-1 text-right text-xs text-foreground outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/30" />
+          {unit && <span>{unit}</span>}
+        </span> : <span className="shrink-0 text-[10px] text-muted">{display}</span>}
+      </div>
+      <div className="relative flex h-6 items-center py-1.5">
+        <input type="range" aria-label={label} min={min} max={max} step={step} value={value} onChange={event => onChange(Number(event.target.value))}
+          onDoubleClick={() => onChange(defaultValue)}
+          className="h-1 w-full cursor-pointer appearance-none rounded-full bg-border [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary [&::-webkit-slider-thumb]:shadow-sm" />
+      </div>
+    </div>
+  </div>;
 }

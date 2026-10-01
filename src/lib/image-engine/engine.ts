@@ -3,7 +3,9 @@ import { ByteCache } from './cache';
 import { gifMetadata, transformGif } from './gif';
 import { GpuRenderer } from './gpu';
 import { frameOrder, renderPixels } from './pixels';
-import { dimensions, isGeometryOnly, isIdentity, mimeTypes, type EngineStats, type ExportOptions, type ExportResult, type ImageFormat, type ImageInfo, type Preview, type Raster, type Transformations } from './types';
+import { applyNativeEffects, hasNativeEffects, nativeSettings, rasterToImage } from './native-effects';
+import { scaledFrameDelay } from './animation';
+import { dimensions, effectiveTransformations, isGeometryOnly, isIdentity, isIndexedGifCompatible, mimeTypes, type EngineStats, type ExportOptions, type ExportResult, type ImageFormat, type ImageInfo, type Preview, type Raster, type Transformations } from './types';
 
 type Magick = typeof import('@imagemagick/magick-wasm');
 const MAX_PIXELS = 64 * 1024 * 1024;
@@ -19,9 +21,10 @@ export class ImageEngine {
   private readonly previewSources = new ByteCache<Raster>(64 * 1024 * 1024);
   private readonly rendered = new ByteCache<Raster>(32 * 1024 * 1024);
   private readonly exports = new ByteCache<ExportResult>(32 * 1024 * 1024);
+  private readonly nativeSources = new ByteCache<Raster>(32 * 1024 * 1024);
   private gpu?: GpuRenderer;
   private gpuUnavailable = false;
-  readonly stats: EngineStats = { decodes: 0, sourceHits: 0, renderHits: 0, exportHits: 0, gpuUploads: 0, gpuFrames: 0, cpuFrames: 0 };
+  readonly stats: EngineStats = { decodes: 0, sourceHits: 0, renderHits: 0, exportHits: 0, gpuUploads: 0, gpuFrames: 0, cpuFrames: 0, nativeFrames: 0, nativeHits: 0 };
 
   private async initialize(assetBase: string) {
     if (!this.loading) this.loading = (async () => {
@@ -79,7 +82,7 @@ export class ImageEngine {
 
   close() {
     this.source?.images.dispose(); this.source = undefined;
-    this.previewSources.clear(); this.rendered.clear(); this.exports.clear(); this.gpu?.dispose(); this.gpu = undefined;
+    this.previewSources.clear(); this.nativeSources.clear(); this.rendered.clear(); this.exports.clear(); this.gpu?.dispose(); this.gpu = undefined;
     this.gpuUnavailable = false; this.stats.gpu = undefined; this.stats.fallbackReason = undefined;
   }
 
@@ -111,12 +114,17 @@ export class ImageEngine {
   }
 
   private imageFromPixels(raster: Raster) {
-    const magick = this.magick!;
-    const collection = magick.MagickImageCollection.create();
-    try {
-      collection.read(new Uint8Array(raster.data), new magick.MagickReadSettings({ width:raster.width, height:raster.height, depth:8, format:magick.MagickFormat.Rgba }));
-      return collection.shift()!;
-    } finally { collection.dispose(); }
+    return rasterToImage(this.magick!, raster);
+  }
+
+  private nativeRaster(source: Raster, t: Transformations, seed: number, scale: number, key: string) {
+    if (!hasNativeEffects(t)) return source;
+    const cached = this.nativeSources.get(key);
+    if (cached) { this.stats.nativeHits++; return cached; }
+    const result = applyNativeEffects(this.magick!, source, t, seed, scale);
+    this.nativeSources.set(key, result, result.data.byteLength);
+    this.stats.nativeFrames++;
+    return result;
   }
 
   private composeGif(patches: IMagickImageCollection, gif: ReturnType<typeof gifMetadata>) {
@@ -155,21 +163,27 @@ export class ImageEngine {
   }
 
   async preview(id: string, transforms: Transformations, seed: number, cancelled: () => boolean, progress: (value: number) => void, forceCpu = false): Promise<Preview> {
+    transforms = effectiveTransformations(transforms);
     const document = this.document(id), { info } = document;
-    const scale = Math.min(1, 1024 / Math.max(info.width, info.height), Math.sqrt(MAX_PREVIEW_PIXELS / (info.width * info.height * info.frameCount)));
+    const order = frameOrder(info.frameCount, transforms.shuffleFrames, seed, transforms.reverseFrames, transforms.pingPong);
+    const native = hasNativeEffects(transforms), budget = native ? 3 * 1024 * 1024 : MAX_PREVIEW_PIXELS;
+    const scale = Math.min(1, (native ? 768 : 1024) / Math.max(info.width, info.height), Math.sqrt(budget / (info.width * info.height * order.length)));
     const width = Math.max(1, Math.round(info.width * scale)), height = Math.max(1, Math.round(info.height * scale));
-    const t = { ...transforms, blur: transforms.blur * scale, pixelate: transforms.pixelate > 1 ? Math.max(2, Math.round(transforms.pixelate * scale)) : 1 };
+    const t = { ...transforms, blur: transforms.blur * scale, rgbSplit: transforms.rgbSplit * scale, pixelate: transforms.pixelate > 1 ? Math.max(2, Math.round(transforms.pixelate * scale)) : 1 };
+    const signature = native ? JSON.stringify(nativeSettings(transforms)) : '';
     const gpu = this.renderer(forceCpu);
     let useGpu = !!gpu, fallbackReason = forceCpu ? 'CPU reference requested' : gpu ? undefined : this.stats.fallbackReason;
-    const order = frameOrder(info.frameCount, transforms.shuffleFrames, seed), frames: ImageBitmap[] = [];
+    const frames: ImageBitmap[] = [];
     const noiseSize = dimensions(info.width, info.height, transforms.rotation);
     try {
       for (let n = 0; n < order.length; n++) {
         if (cancelled()) throw new Cancelled();
-        const index = order[n], raster = this.previewSource(index, width, height), frameSeed = (seed ^ Math.imul(index, 0x9e3779b9)) >>> 0;
+        const index = order[n], frameSeed = (seed ^ Math.imul(index, 0x9e3779b9)) >>> 0;
+        const sourceKey = `preview:${index}:${width}:${height}:${signature}:${native ? frameSeed : ''}`;
+        const raster = this.nativeRaster(this.previewSource(index, width, height), transforms, frameSeed, scale, sourceKey);
         let bitmap: ImageBitmap | undefined;
         if (useGpu) {
-          try { bitmap = gpu!.render(raster, t, frameSeed, `preview:${index}:${width}:${height}`, noiseSize); this.stats.gpuUploads = gpu!.uploads; this.stats.gpuFrames++; }
+          try { bitmap = gpu!.render(raster, t, frameSeed, sourceKey, noiseSize); this.stats.gpuUploads = gpu!.uploads; this.stats.gpuFrames++; }
           catch (error) { useGpu = false; fallbackReason = this.fallback(error); }
         }
         if (!bitmap) {
@@ -187,15 +201,16 @@ export class ImageEngine {
         await tick();
       }
       if (cancelled()) throw new Cancelled();
-      return { sourceId: id, displayWidth:noiseSize.width, displayHeight:noiseSize.height, frames, ...dimensions(width, height, transforms.rotation), delays: order.map(i => info.delays[i]), iterations: info.iterations, backend: useGpu ? 'webgl2' : 'cpu', gpu:gpu?.info, fallbackReason };
+      return { sourceId: id, displayWidth:noiseSize.width, displayHeight:noiseSize.height, frames, ...dimensions(width, height, transforms.rotation), delays: order.map(i => scaledFrameDelay(info.delays[i], transforms.gifSpeed)), iterations: info.iterations, backend: useGpu ? 'webgl2' : 'cpu', gpu:gpu?.info, fallbackReason };
     } catch (error) { frames.forEach(frame => frame.close()); throw error; }
   }
 
   async encode(id: string, bytes: Uint8Array, format: ImageFormat, assetBase: string, t: Transformations, seed: number, options: ExportOptions, cancelled: () => boolean, progress: (value: number) => void): Promise<ExportResult> {
+    t = effectiveTransformations(t);
     const key = `encoded:${id}:${JSON.stringify(t)}:${seed}:${JSON.stringify(options)}`;
     const cached = this.exports.get(key);
     if (cached) { this.stats.exportHits++; progress(100); return cached; }
-    if (format === 'gif' && (options.format === 'auto' || options.format === 'gif') && isGeometryOnly(t)) {
+    if (format === 'gif' && (options.format === 'auto' || options.format === 'gif') && isIndexedGifCompatible(t)) {
       if (cancelled()) throw new Cancelled();
       const result: ExportResult = { blob:new Blob([new Uint8Array(transformGif(bytes,t))],{type:'image/gif'}), format:'gif', preserved:true, backend:'indexed' };
       if (cancelled()) throw new Cancelled();
@@ -207,6 +222,7 @@ export class ImageEngine {
   }
 
   async export(id: string, t: Transformations, seed: number, options: ExportOptions, cancelled: () => boolean, progress: (value: number) => void): Promise<ExportResult> {
+    t = effectiveTransformations(t);
     const document = this.document(id), { info, bytes } = document, magick = this.magick!;
     const format = options.format === 'auto'
       ? isIdentity(t) ? info.format : info.animated || info.format === 'gif' ? 'gif' : 'png'
@@ -217,19 +233,25 @@ export class ImageEngine {
     let result: ExportResult;
     if (isIdentity(t) && format === info.format && (options.format === 'auto' || format === 'png' || format === 'gif')) {
       result = { blob: new Blob([new Uint8Array(bytes)], { type: mimeTypes[info.format] }), format, preserved: true, backend:'original' };
-    } else if (info.format === 'gif' && format === 'gif' && isGeometryOnly(t)) {
+    } else if (info.format === 'gif' && format === 'gif' && isIndexedGifCompatible(t)) {
       result = { blob: new Blob([new Uint8Array(transformGif(bytes, t))], { type: 'image/gif' }), format, preserved: true, backend:'indexed' };
     } else {
-      const order = frameOrder(info.frameCount, t.shuffleFrames, seed), images = magick.MagickImageCollection.create();
+      const order = frameOrder(info.frameCount, t.shuffleFrames, seed, t.reverseFrames, t.pingPong), images = magick.MagickImageCollection.create();
+      if (format === 'gif' && (order.length > 1000 || info.width * info.height * order.length > MAX_PIXELS)) {
+        images.dispose(); throw new Error('The output animation exceeds the browser memory budget. Reduce its dimensions or turn off Ping-pong.');
+      }
+      const native = hasNativeEffects(t), signature = native ? JSON.stringify(nativeSettings(t)) : '';
       const exact = isGeometryOnly(t), gpu = exact ? undefined : this.renderer();
       let useGpu = !!gpu, fallbackReason = exact || gpu ? undefined : this.stats.fallbackReason;
       try {
         for (let n = 0; n < (format === 'gif' ? order.length : 1); n++) {
           if (cancelled()) throw new Cancelled();
-          const index = order[n], source = this.pixels(document.images[index]), frameSeed = (seed ^ Math.imul(index, 0x9e3779b9)) >>> 0;
+          const index = order[n], frameSeed = (seed ^ Math.imul(index, 0x9e3779b9)) >>> 0;
+          const sourceKey = `export:${index}:${signature}:${native ? frameSeed : ''}`;
+          const source = this.nativeRaster(this.pixels(document.images[index]), t, frameSeed, 1, sourceKey);
           let raster: Raster | undefined;
           if (useGpu) {
-            try { raster = gpu!.renderRaster(source, t, frameSeed, `export:${index}`); this.stats.gpuUploads = gpu!.uploads; this.stats.gpuFrames++; }
+            try { raster = gpu!.renderRaster(source, t, frameSeed, sourceKey); this.stats.gpuUploads = gpu!.uploads; this.stats.gpuFrames++; }
             catch (error) { useGpu = false; fallbackReason = this.fallback(error); }
           }
           if (!raster) { raster = renderPixels(source, t, frameSeed); this.stats.cpuFrames++; }
@@ -254,7 +276,7 @@ export class ImageEngine {
           if (format !== 'gif') image.setProfile(this.profile!);
           image.quality = options.quality;
           if (format === 'gif') {
-            image.animationDelay = Math.round(info.delays[index] / 10); image.animationTicksPerSecond = 100;
+            image.animationDelay = Math.round(scaledFrameDelay(info.delays[index], t.gifSpeed) / 10); image.animationTicksPerSecond = 100;
             image.animationIterations = info.iterations; image.gifDisposeMethod = magick.GifDisposeMethod.Background;
             image.backgroundColor = magick.MagickColors.Transparent;
             if (image.totalColors > 256) {

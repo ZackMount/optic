@@ -1,4 +1,5 @@
 import { dimensions, isGeometryOnly, type Raster, type Transformations } from './types';
+import { artistic, grade, hashNoise, hasWarp, luminance, samplePixel, texture, tone, warpedPoint, type Color } from './creative';
 
 export function sourcePoint(x: number, y: number, width: number, height: number, t: Transformations) {
   let sx = x, sy = y;
@@ -12,10 +13,13 @@ export function sourcePoint(x: number, y: number, width: number, height: number,
 
 export function geometry(source: Raster, t: Transformations): Raster {
   const { width, height } = dimensions(source.width, source.height, t.rotation);
-  if (!t.rotation && !t.flipHorizontal && !t.flipVertical) return { width, height, data: source.data.slice() };
+  const warped = hasWarp(t);
+  if (!t.rotation && !t.flipHorizontal && !t.flipVertical && !warped) return { width, height, data: source.data.slice() };
   const data = new Uint8ClampedArray(width * height * 4);
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-    const [sx, sy] = sourcePoint(x, y, source.width, source.height, t);
+    const [px, py] = warped ? warpedPoint(x, y, width, height, t) : [x, y];
+    const [sx, sy] = sourcePoint(px, py, source.width, source.height, t);
+    if (warped) { data.set(samplePixel(source, sx, sy), (y * width + x) * 4); continue; }
     const from = (sy * source.width + sx) * 4, to = (y * width + x) * 4;
     data[to] = source.data[from]; data[to + 1] = source.data[from + 1]; data[to + 2] = source.data[from + 2]; data[to + 3] = source.data[from + 3];
   }
@@ -63,18 +67,17 @@ function blur(source: Raster, sigma: number): Raster {
 
 const clamp = (n: number) => Math.min(255, Math.max(0, n));
 export function pixelNoise(index: number, seed: number) {
-  let value = (index ^ seed) >>> 0;
-  value = Math.imul(value ^ (value >>> 16), 0x7feb352d) >>> 0;
-  value = Math.imul(value ^ (value >>> 15), 0x846ca68b) >>> 0;
-  return (((value ^ (value >>> 16)) >>> 0) & 65535) / 65535 - 0.5;
+  return hashNoise(index, seed);
 }
-export function frameOrder(count: number, shuffle: boolean, seed: number) {
+export function frameOrder(count: number, shuffle: boolean, seed: number, reverse = false, pingPong = false) {
   const order = Array.from({ length: count }, (_, i) => i);
   if (shuffle) for (let i = count - 1; i > 0; i--) {
     const j = Math.floor((pixelNoise(i, seed) + 0.5) * (i + 1));
     const safe = Math.min(i, j);
     [order[i], order[safe]] = [order[safe], order[i]];
   }
+  if (reverse) order.reverse();
+  if (pingPong && count > 2) order.push(...order.slice(1, -1).reverse());
   return order;
 }
 
@@ -102,7 +105,7 @@ export function mirrorPoint(x: number, y: number, w: number, h: number, mode: Tr
 export function renderPixels(source: Raster, t: Transformations, seed: number, noiseSize?: { width: number; height: number }): Raster {
   let raster = geometry(source, t);
   const { width, height } = raster;
-  if (isGeometryOnly({ ...t, shuffleFrames: false })) return raster;
+  if (isGeometryOnly({ ...t, shuffleFrames: false, reverseFrames: false, pingPong: false, gifSpeed: 100 })) return raster;
   if (t.pixelate > 1) {
     const data = new Uint8ClampedArray(raster.data.length), size = Math.max(1, Math.round(t.pixelate));
     for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
@@ -114,24 +117,55 @@ export function renderPixels(source: Raster, t: Transformations, seed: number, n
     raster = { width, height, data };
   }
   if (t.blur > 0) raster = blur(raster, t.blur);
-  const output = new Uint8ClampedArray(raster.data.length);
-  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-    const [sx, sy] = mirrorPoint(x, y, width, height, t.mirrorMode);
-    const p = (sy * width + sx) * 4, out = (y * width + x) * 4;
-    let r = raster.data[p], g = raster.data[p + 1], b = raster.data[p + 2];
-    const brightness = t.brightness / 100, contrast = t.contrast / 100, saturation = t.saturation / 100;
+  const noiseWidth = noiseSize?.width ?? width, noiseHeight = noiseSize?.height ?? height;
+  const glow = t.bloom ? blur(raster, Math.max(0.5, 4 * width / noiseWidth)) : null;
+  const adjust = (pixel: number[]): Color => {
+    let [r, g, b] = pixel;
+    const brightness = t.brightness / 100 * 2 ** t.exposure, contrast = t.contrast / 100, saturation = t.saturation / 100;
     r = clamp(r * brightness); g = clamp(g * brightness); b = clamp(b * brightness);
     r = clamp(r * contrast + 128 * (1 - contrast)); g = clamp(g * contrast + 128 * (1 - contrast)); b = clamp(b * contrast + 128 * (1 - contrast));
     const gray = 0.299 * r + 0.587 * g + 0.114 * b;
     r = clamp(gray + saturation * (r - gray)); g = clamp(gray + saturation * (g - gray)); b = clamp(gray + saturation * (b - gray));
     if (t.hueRotate) [r, g, b] = hue(r, g, b, t.hueRotate);
+    [r, g, b] = tone([r, g, b], t);
     if (t.grayscale) r = g = b = 0.299 * r + 0.587 * g + 0.114 * b;
     if (t.invert) { r = 255 - r; g = 255 - g; b = 255 - b; }
     if (t.sepia) [r, g, b] = [clamp(0.393 * r + 0.769 * g + 0.189 * b), clamp(0.349 * r + 0.686 * g + 0.168 * b), clamp(0.272 * r + 0.534 * g + 0.131 * b)];
-    const noiseWidth = noiseSize?.width ?? width, noiseHeight = noiseSize?.height ?? height;
+    return [r, g, b];
+  };
+  const sample = (x: number, y: number): [number, number, number, number] => {
+    if (Number.isInteger(x) && Number.isInteger(y)) {
+      if (x < 0 || y < 0 || x >= width || y >= height) return [0, 0, 0, 0];
+      const p = (y * width + x) * 4;
+      return [raster.data[p], raster.data[p + 1], raster.data[p + 2], raster.data[p + 3]];
+    }
+    return samplePixel(raster, x, y);
+  };
+  const output = new Uint8ClampedArray(raster.data.length);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const px = (x + 0.5) * noiseWidth / width - 0.5, py = (y + 0.5) * noiseHeight / height - 0.5;
+    const band = Math.floor((py + 0.5) / 24);
+    const shifted = t.glitch && pixelNoise(band, seed) > 0.25 ? x + Math.round(pixelNoise(band + 17, seed) * t.glitch * 0.005 * width) : x;
+    const [sx, sy] = mirrorPoint(shifted, y, width, height, t.mirrorMode);
+    const input = sample(sx, sy), out = (y * width + x) * 4;
+    let c = adjust(input);
+    if (t.rgbSplit) c = [adjust(samplePixel(raster, sx + t.rgbSplit, sy))[0], c[1], adjust(samplePixel(raster, sx - t.rgbSplit, sy))[2]];
+    c = grade(c, t);
+    if (['neon', 'blueprint', 'comic'].includes(t.artStyle)) {
+      const get = (x: number, y: number) => { const rgba = sample(x, y); return luminance(adjust(rgba)) * rgba[3] / 255; };
+      const tl = get(sx - 1, sy - 1), tc = get(sx, sy - 1), tr = get(sx + 1, sy - 1);
+      const ml = get(sx - 1, sy), mr = get(sx + 1, sy), bl = get(sx - 1, sy + 1), bc = get(sx, sy + 1), br = get(sx + 1, sy + 1);
+      const edge = Math.min(1, Math.sqrt((tr + 2 * mr + br - tl - 2 * ml - bl) ** 2 + (bl + 2 * bc + br - tl - 2 * tc - tr) ** 2));
+      c = artistic(c, edge, px + 0.5, py + 0.5, t);
+    }
+    if (glow) {
+      const rgba = samplePixel(glow, sx, sy), light = adjust(rgba);
+      c = c.map((value, channel) => clamp(value + Math.max(0, light[channel] - 140.25) * t.bloom / 100 * 1.5)) as Color;
+    }
+    c = texture(c, px, py, noiseWidth, noiseHeight, t);
     const noiseX = Math.floor((sx + 0.5) * noiseWidth / width), noiseY = Math.floor((sy + 0.5) * noiseHeight / height);
     const noise = pixelNoise(noiseY * noiseWidth + noiseX, seed) * t.noise * 2.55;
-    output[out] = clamp(r + noise); output[out + 1] = clamp(g + noise); output[out + 2] = clamp(b + noise); output[out + 3] = raster.data[p + 3];
+    output[out] = clamp(c[0] + noise); output[out + 1] = clamp(c[1] + noise); output[out + 2] = clamp(c[2] + noise); output[out + 3] = input[3];
   }
   return { width, height, data: output };
 }
